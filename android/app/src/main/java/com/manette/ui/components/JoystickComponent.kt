@@ -3,6 +3,8 @@ package com.manette.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
@@ -12,6 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -151,29 +154,40 @@ fun FloatingJoystickZone(
     Box(
         modifier = modifier
             .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { startPos ->
-                        // Ancrer le joystick exactement où le pouce se pose
-                        anchorOffset = startPos
-                        thumbOffset = Offset.Zero
-                        onMove(0f, 0f)
-                    },
-                    onDrag = { change, _ ->
-                        change.consume()
-                        val anchor = anchorOffset ?: return@detectDragGestures
-                        updateKnob(change.position - anchor)
-                    },
-                    onDragEnd = {
-                        anchorOffset = null
-                        thumbOffset = Offset.Zero
-                        onMove(0f, 0f)
-                    },
-                    onDragCancel = {
-                        anchorOffset = null
-                        thumbOffset = Offset.Zero
-                        onMove(0f, 0f)
+                // Fix P0-3 : awaitEachGesture + awaitFirstDown remplace detectDragGestures.
+                // detectDragGestures n'appelle onDragStart qu'après franchissement du seuil
+                // touchSlop (8–16 dp), retardant l'ancrage. Ici, le joystick s'ancre
+                // dès le premier toucher, sans seuil.
+                awaitEachGesture {
+                    // Attendre le premier contact — SANS seuil de glissement
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+
+                    // Ancrer immédiatement au point de contact
+                    anchorOffset = down.position
+                    thumbOffset = Offset.Zero
+                    onMove(0f, 0f)
+
+                    // Suivre les mouvements du même pointerId
+                    val pointerId = down.id
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val pointer = event.changes.firstOrNull { it.id == pointerId }
+                            ?: break  // doigt levé
+
+                        if (!pointer.pressed) {
+                            // Doigt relevé → reset
+                            anchorOffset = null
+                            thumbOffset = Offset.Zero
+                            onMove(0f, 0f)
+                            break
+                        }
+
+                        pointer.consume()
+                        val anchor = anchorOffset ?: break
+                        updateKnob(pointer.position - anchor)
                     }
-                )
+                }
             }
     ) {
         // ── Cercle fantôme en mode idle ────────────────────────────────────────
