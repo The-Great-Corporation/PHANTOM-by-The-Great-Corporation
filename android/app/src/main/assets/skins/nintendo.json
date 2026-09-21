@@ -1,0 +1,15 @@
+{
+  "skin_id": "nintendo",
+  "display_name": "Nintendo",
+  "description": "Layout Nintendo Switch — disposition inversée B/A et couleurs officielles.",
+  "schema_version": 2,
+  "buttons": {
+    "a": { "label": "B", "color": "#E74C3C" },
+    "b": { "label": "A", "color": "#2ECC71" },
+    "x": { "label": "Y", "color": "#F1C40F" },
+    "y": { "label": "X", "color": "#3498DB" }
+  },
+  "dpad_color":   "#353B4E",
+  "bumper_color": "#2C3244",
+  "center_color": "#232838"
+}

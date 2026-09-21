@@ -1,0 +1,15 @@
+{
+  "skin_id": "xbox",
+  "display_name": "Xbox Standard",
+  "description": "Layout classique Microsoft Xbox — couleurs officielles A/B/X/Y.",
+  "schema_version": 2,
+  "buttons": {
+    "a": { "label": "A", "color": "#2ECC71" },
+    "b": { "label": "B", "color": "#E74C3C" },
+    "x": { "label": "X", "color": "#3498DB" },
+    "y": { "label": "Y", "color": "#F1C40F" }
+  },
+  "dpad_color":   "#353B4E",
+  "bumper_color": "#2C3244",
+  "center_color": "#232838"
+}

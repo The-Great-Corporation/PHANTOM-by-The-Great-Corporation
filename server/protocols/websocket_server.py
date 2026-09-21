@@ -23,6 +23,10 @@ class WebSocketServer:
         self.clients: Dict[str, object] = {}  # client_id -> websocket
         self._running = False
         self._server = None
+        self.max_message_size = 8 * 1024
+        
+        if hasattr(self.haptic_feedback, 'register_sender'):
+            self.haptic_feedback.register_sender(self._send_vibration_to_client)
         
     async def start(self):
         """Start the WebSocket server."""
@@ -34,7 +38,8 @@ class WebSocketServer:
             self._server = await serve(
                 self._handle_client,
                 self.host,
-                self.port
+                self.port,
+                max_size=self.max_message_size,
             )
             logger.info(f"WebSocket server listening on {self.host}:{self.port}")
             
@@ -64,7 +69,7 @@ class WebSocketServer:
         
         self.clients.clear()
     
-    async def _handle_client(self, websocket, path):
+    async def _handle_client(self, websocket, path=None):
         """Handle a WebSocket client connection."""
         client_id = None
         
@@ -79,11 +84,15 @@ class WebSocketServer:
                     if msg_type == 'connect':
                         client_id = data.get('client_id')
                         if client_id:
-                            await self.connection_manager.connect_client(
+                            accepted = await self.connection_manager.connect_client(
                                 client_id,
                                 'websocket',
                                 str(websocket.remote_address)
                             )
+                            if not accepted:
+                                client_id = None
+                                await websocket.close(code=1008, reason='Maximum clients reached')
+                                return
                             self.clients[client_id] = websocket
                             
                             # Send connection confirmation
@@ -93,7 +102,7 @@ class WebSocketServer:
                             }))
                     
                     elif msg_type == 'input':
-                        if client_id:
+                        if client_id and self.clients.get(client_id) is websocket:
                             await self._handle_input(client_id, data.get('data', {}))
                     
                     elif msg_type == 'heartbeat':
@@ -150,12 +159,31 @@ class WebSocketServer:
                 right_stick_y=input_data.get('right_stick_y', 0.0),
             )
             
-            await self.gamepad_emulator.update_state(state)
+            try:
+                await self.gamepad_emulator.update_state(state, client_id=client_id)
+            except TypeError:
+                await self.gamepad_emulator.update_state(state)
             await self.connection_manager.handle_input(client_id, input_data)
             
         except Exception as e:
             logger.error(f"Error handling input: {e}")
     
+    async def _send_vibration_to_client(self, client_id: str, left: float, right: float, duration: float):
+        """Send vibration payload to WebSocket client."""
+        if client_id not in self.clients:
+            return
+        websocket = self.clients[client_id]
+        try:
+            message = json.dumps({
+                'type': 'vibration',
+                'left': left,
+                'right': right,
+                'duration': duration
+            })
+            await websocket.send(message)
+        except Exception as e:
+            logger.error(f"Error sending vibration over websocket: {e}")
+
     async def send_haptic_feedback(self, client_id: str, intensity: float, duration: float):
         """Send haptic feedback to client."""
         if client_id not in self.clients:

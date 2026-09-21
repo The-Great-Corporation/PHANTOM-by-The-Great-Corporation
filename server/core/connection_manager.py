@@ -33,6 +33,7 @@ class ConnectionManager:
         self.reconnect_interval = config.get('connection', {}).get('reconnect_interval', 5)
         self._cleanup_task: Optional[asyncio.Task] = None
         self._input_callbacks: list = []
+        self._disconnect_callbacks: list = []
         
     async def start(self):
         """Start the connection manager."""
@@ -56,17 +57,22 @@ class ConnectionManager:
     def register_input_callback(self, callback: Callable):
         """Register a callback for handling input data."""
         self._input_callbacks.append(callback)
+
+    def register_disconnect_callback(self, callback: Callable):
+        """Register a callback called when a client disconnects."""
+        self._disconnect_callbacks.append(callback)
     
     async def connect_client(self, client_id: str, protocol: str, address: str) -> bool:
         """Register a new client connection."""
+        if client_id in self.clients:
+            logger.info(f"Client {client_id} already connected, refreshing activity")
+            client = self.clients[client_id]
+            client.last_activity = datetime.now()
+            return True
+
         if len(self.clients) >= self.max_clients:
             logger.warning(f"Max clients ({self.max_clients}) reached, rejecting {client_id}")
             return False
-        
-        if client_id in self.clients:
-            logger.warning(f"Client {client_id} already connected, updating")
-            self.clients[client_id].last_activity = datetime.now()
-            return True
         
         client = ClientConnection(
             client_id=client_id,
@@ -86,6 +92,14 @@ class ConnectionManager:
             client = self.clients[client_id]
             logger.info(f"Client {client_id} disconnected (was connected via {client.protocol})")
             del self.clients[client_id]
+            
+            for callback in self._disconnect_callbacks:
+                try:
+                    res = callback(client_id)
+                    if asyncio.iscoroutine(res):
+                        await res
+                except Exception as e:
+                    logger.error(f"Error in disconnect callback: {e}")
     
     async def update_activity(self, client_id: str, latency_ms: float = 0.0):
         """Update client activity timestamp and latency."""

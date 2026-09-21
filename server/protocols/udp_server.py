@@ -22,6 +22,11 @@ class UDPServer:
         self.server: Optional[asyncio.DatagramProtocol] = None
         self.transport: Optional[asyncio.DatagramTransport] = None
         self._running = False
+        self.max_datagram_size = 8 * 1024
+        self.client_addrs: Dict[str, tuple] = {}
+        
+        if hasattr(self.haptic_feedback, 'register_sender'):
+            self.haptic_feedback.register_sender(self._send_vibration_to_client)
         
     async def start(self):
         """Start the UDP server."""
@@ -77,6 +82,9 @@ class UDPServer:
     async def _handle_datagram(self, data, addr):
         """Handle incoming UDP datagram."""
         try:
+            if len(data) > self.max_datagram_size:
+                logger.warning("Discarding oversized UDP datagram from %s", addr[0])
+                return
             # Parse JSON data
             message = json.loads(data.decode('utf-8'))
             msg_type = message.get('type')
@@ -99,11 +107,15 @@ class UDPServer:
                 return
             
             # Register client if new
-            await self.connection_manager.connect_client(
+            accepted = await self.connection_manager.connect_client(
                 client_id,
                 'udp',
                 f"{addr[0]}:{addr[1]}"
             )
+            if not accepted:
+                return
+            
+            self.client_addrs[client_id] = addr
             
             if msg_type == 'input':
                 await self._handle_input(client_id, message.get('data', {}))
@@ -146,14 +158,32 @@ class UDPServer:
                 right_stick_y=input_data.get('right_stick_y', 0.0),
             )
             
-            # Update gamepad state
-            await self.gamepad_emulator.update_state(state)
+            # Update gamepad state with client_id (backward-compatible)
+            try:
+                await self.gamepad_emulator.update_state(state, client_id=client_id)
+            except TypeError:
+                await self.gamepad_emulator.update_state(state)
             
             # Update connection manager
             await self.connection_manager.handle_input(client_id, input_data)
             
         except Exception as e:
             logger.error(f"Error handling input: {e}")
+
+    def _send_vibration_to_client(self, client_id: str, left: float, right: float, duration: float):
+        """Send vibration payload to UDP client."""
+        addr = self.client_addrs.get(client_id)
+        if addr and self.transport:
+            try:
+                payload = json.dumps({
+                    'type': 'vibration',
+                    'left': left,
+                    'right': right,
+                    'duration': duration
+                }).encode('utf-8')
+                self.transport.sendto(payload, addr)
+            except Exception as e:
+                logger.error(f"Error sending UDP vibration to {client_id}: {e}")
     
     async def _send_pong(self, client_id: str, addr):
         """Send pong response to ping."""

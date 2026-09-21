@@ -10,10 +10,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
@@ -35,7 +37,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.manette.config.SkinLoader
+import com.manette.ui.components.ReactiveGamepadButton
+import com.manette.ui.components.HapticCategory
+import com.manette.ui.components.SkinButtonTheme
 import com.manette.ui.components.TGCWatermarkBadge
+import com.manette.ui.components.getSkinTheme
 import com.manette.ui.theme.*
 import com.manette.viewmodel.GameViewModel
 
@@ -66,6 +73,9 @@ fun ConfigStudioScreen(
     var tempOffsetX by remember { mutableStateOf(0.0f) }
     var tempOffsetY by remember { mutableStateOf(0.0f) }
     var showAdjustDialog by remember { mutableStateOf(false) }
+    // Skin : preview avant adoption
+    var showSkinPreview by remember { mutableStateOf(false) }
+    var pendingSkin by remember { mutableStateOf(skin) }
 
     val context = LocalContext.current
 
@@ -100,7 +110,7 @@ fun ConfigStudioScreen(
                     .crossfade(true)
                     .build(),
                 contentDescription = null,
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
@@ -517,33 +527,53 @@ fun ConfigStudioScreen(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text("Skin des Touches :", fontSize = 12.sp, color = Color.White)
+                    Text(
+                        "Appuyez sur un skin pour prévisualiser — le skin actuel est marqué ✔",
+                        fontSize = 10.sp,
+                        color = Color.White.copy(alpha = 0.5f)
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         listOf(
-                            "xbox" to "Xbox",
+                            "xbox"        to "Xbox",
                             "playstation" to "PS",
-                            "nintendo" to "Nintendo",
-                            "cyberpunk" to "Néon",
-                            "ghost" to "Ghost"
+                            "nintendo"    to "Nintendo",
+                            "cyberpunk"   to "Néon",
+                            "ghost"       to "Ghost"
                         ).forEach { (key, label) ->
-                            val isSelected = skin == key
+                            val isActive = skin == key
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (isSelected) GamepadPrimary else GamepadCard,
+                                color = if (isActive) GamepadPrimary else GamepadCard,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .clickable { viewModel.setSkin(key) }
+                                    .clickable {
+                                        pendingSkin = key
+                                        showSkinPreview = true
+                                    }
                             ) {
-                                Text(
-                                    text = label,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSelected) Color.Black else Color.White,
-                                    modifier = Modifier.padding(vertical = 10.dp),
-                                    textAlign = TextAlign.Center
-                                )
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(vertical = 8.dp)
+                                ) {
+                                    if (isActive) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = Color.Black,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = label,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isActive) Color.Black else Color.White,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
                             }
                         }
                     }
@@ -603,6 +633,20 @@ fun ConfigStudioScreen(
         }
     }
 
+    // ── Dialogue de preview de skin — adoption uniquement si l'utilisateur valide ──
+    if (showSkinPreview) {
+        SkinPreviewDialog(
+            skinId = pendingSkin,
+            currentSkinId = skin,
+            onAdopt = {
+                viewModel.setSkin(pendingSkin)
+                showSkinPreview = false
+                Toast.makeText(context, "Skin \"${pendingSkin}\" adopté !", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showSkinPreview = false }
+        )
+    }
+
     // ── Dialogue d'ajustement interactif préalable de l'arrière-plan ──────
     if (showAdjustDialog && pendingBgUri != null) {
         BackgroundAdjustDialog(
@@ -631,6 +675,235 @@ fun ConfigStudioScreen(
         )
     }
 }
+}
+
+/**
+ * Dialogue de prévisualisation d'un skin avant adoption.
+ * Affiche les 4 boutons ABXY + une mini croix directionnelle dans les couleurs du skin sélectionné.
+ * L'utilisateur peut annuler (aucune modification) ou adopter (viewModel.setSkin est appelé depuis le parent).
+ */
+@Composable
+fun SkinPreviewDialog(
+    skinId: String,
+    currentSkinId: String,
+    onAdopt: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val theme = getSkinTheme(context, skinId)
+    val skinMeta = remember(skinId) {
+        SkinLoader.listSkins(context).find { it.skinId == skinId }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = GamepadSurface,
+        title = {
+            Column {
+                Text(
+                    skinMeta?.displayName ?: skinId.replaceFirstChar { it.uppercase() },
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = GamepadPrimary
+                )
+                Text(
+                    skinMeta?.description ?: "Prévisualisation du skin",
+                    fontSize = 10.sp,
+                    color = Color.White.copy(alpha = 0.6f),
+                    lineHeight = 14.sp
+                )
+                if (currentSkinId == skinId) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = Color(0xFF00E676).copy(alpha = 0.15f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        Text(
+                            "✔ Skin actuellement actif",
+                            fontSize = 10.sp,
+                            color = Color(0xFF00E676),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // ── Mini manette preview ──────────────────────────────────────
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(2.2f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .border(1.dp, GamepadPrimary.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // ── D-Pad mockup ──────────────────────────────────────
+                        Box(
+                            modifier = Modifier.size(80.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val dpadSize = 28.dp
+                            val dpadShape = RoundedCornerShape(4.dp)
+                            // Haut
+                            Box(
+                                modifier = Modifier
+                                    .offset(y = (-30).dp)
+                                    .size(dpadSize)
+                                    .background(theme.dpadColor, dpadShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.2f), dpadShape)
+                            )
+                            // Bas
+                            Box(
+                                modifier = Modifier
+                                    .offset(y = 30.dp)
+                                    .size(dpadSize)
+                                    .background(theme.dpadColor, dpadShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.2f), dpadShape)
+                            )
+                            // Gauche
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = (-30).dp)
+                                    .size(dpadSize)
+                                    .background(theme.dpadColor, dpadShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.2f), dpadShape)
+                            )
+                            // Droite
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = 30.dp)
+                                    .size(dpadSize)
+                                    .background(theme.dpadColor, dpadShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.2f), dpadShape)
+                            )
+                            // Centre
+                            Box(
+                                modifier = Modifier
+                                    .size(dpadSize)
+                                    .background(theme.dpadColor, dpadShape)
+                            )
+                        }
+
+                        // ── Cluster ABXY ──────────────────────────────────────
+                        Box(
+                            modifier = Modifier.size(80.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val btnSize = 30.dp
+                            // Y — haut
+                            Box(
+                                modifier = Modifier
+                                    .offset(y = (-30).dp)
+                                    .size(btnSize)
+                                    .clip(CircleShape)
+                                    .background(theme.yColor, CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) { Text(theme.yLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f)) }
+                            // A — bas
+                            Box(
+                                modifier = Modifier
+                                    .offset(y = 30.dp)
+                                    .size(btnSize)
+                                    .clip(CircleShape)
+                                    .background(theme.aColor, CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) { Text(theme.aLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f)) }
+                            // X — gauche
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = (-30).dp)
+                                    .size(btnSize)
+                                    .clip(CircleShape)
+                                    .background(theme.xColor, CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) { Text(theme.xLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f)) }
+                            // B — droite
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = 30.dp)
+                                    .size(btnSize)
+                                    .clip(CircleShape)
+                                    .background(theme.bColor, CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) { Text(theme.bLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f)) }
+                        }
+                    }
+
+                    // Label centré en bas de la preview
+                    Text(
+                        text = "Prévisualisation — non interactive",
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 4.dp),
+                        fontSize = 9.sp,
+                        color = Color.White.copy(alpha = 0.35f)
+                    )
+                }
+
+                // ── Bumpers mockup ligne compacte ─────────────────────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("LT" to theme.bumperColor, "LB" to theme.bumperColor,
+                           "RB" to theme.bumperColor, "RT" to theme.bumperColor)
+                        .forEach { (label, color) ->
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = color,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    label,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White.copy(alpha = 0.75f),
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 6.dp)
+                                )
+                            }
+                        }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onAdopt,
+                colors = ButtonDefaults.buttonColors(containerColor = GamepadPrimary),
+                shape = RoundedCornerShape(8.dp),
+                enabled = currentSkinId != skinId
+            ) {
+                Text(
+                    if (currentSkinId == skinId) "Skin actif" else "Adopter ce skin",
+                    color = if (currentSkinId == skinId) Color.Black.copy(alpha = 0.5f) else Color.Black,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annuler", color = Color.Gray, fontSize = 12.sp)
+            }
+        }
+    )
 }
 
 @Composable
@@ -681,16 +954,19 @@ fun BackgroundAdjustDialog(
                     color = Color.White.copy(alpha = 0.8f)
                 )
 
-                // Cadre de prévisualisation avec gestes tactiles
+                // Cadre de prévisualisation avec gestes tactiles — ratio proche d'un écran de téléphone
+                // pour que ce qu'on cadre ici corresponde à ce qui s'affichera réellement en jeu
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(170.dp)
+                        .fillMaxWidth(0.62f)
+                        .aspectRatio(9f / 19.5f)
                         .clip(RoundedCornerShape(12.dp))
                         .border(1.5.dp, GamepadPrimary, RoundedCornerShape(12.dp))
                         .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoom, _ ->
-                                onScaleChange((scale * zoom).coerceIn(1.0f, 4.0f))
+                                // 0.3f minimum : permet de dézoomer sous le niveau de rognage
+                                // automatique pour revoir l'image entière avant de choisir le cadrage
+                                onScaleChange((scale * zoom).coerceIn(0.3f, 4.0f))
                                 onOffsetXChange((offsetX + pan.x / 400f).coerceIn(-0.6f, 0.6f))
                                 onOffsetYChange((offsetY + pan.y / 250f).coerceIn(-0.6f, 0.6f))
                             }
@@ -702,7 +978,9 @@ fun BackgroundAdjustDialog(
                             .crossfade(true)
                             .build(),
                         contentDescription = "Aperçu arrière-plan",
-                        contentScale = ContentScale.Crop,
+                        // Fit plutôt que Crop : l'image entière est visible par défaut,
+                        // c'est le zoom (scale) qui décide ensuite du rognage, pas le rendu initial
+                        contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer {
@@ -740,7 +1018,7 @@ fun BackgroundAdjustDialog(
                     Slider(
                         value = scale,
                         onValueChange = onScaleChange,
-                        valueRange = 1.0f..4.0f,
+                        valueRange = 0.3f..4.0f,
                         colors = SliderDefaults.colors(
                             thumbColor = GamepadPrimary,
                             activeTrackColor = GamepadPrimary

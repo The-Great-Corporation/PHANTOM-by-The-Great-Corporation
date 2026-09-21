@@ -10,7 +10,8 @@ import java.net.InetAddress
 class UdpClient(
     private var serverIp: String,
     private val port: Int,
-    private val onLatencyUpdated: ((Int) -> Unit)? = null
+    private val onLatencyUpdated: ((Int) -> Unit)? = null,
+    private val onVibrationReceived: ((Float, Float, Float) -> Unit)? = null
 ) : NetworkClient {
     
     private var socket: DatagramSocket? = null
@@ -126,10 +127,18 @@ class UdpClient(
     private fun handleIncomingMessage(jsonStr: String) {
         try {
             val data = gson.fromJson(jsonStr, Map::class.java)
-            val type = data["type"] as? String
-            if (type == "pong") {
-                val rtt = (System.currentTimeMillis() - lastPingSentTime).toInt().coerceAtLeast(1)
-                onLatencyUpdated?.invoke(rtt)
+            when (data["type"] as? String) {
+                "pong" -> {
+                    val rtt = (System.currentTimeMillis() - lastPingSentTime).toInt().coerceAtLeast(1)
+                    onLatencyUpdated?.invoke(rtt)
+                }
+                "vibration" -> {
+                    // Retour haptique du jeu PC → vibration native du téléphone
+                    val left = (data["left_motor"] as? Double)?.toFloat() ?: 0f
+                    val right = (data["right_motor"] as? Double)?.toFloat() ?: 0f
+                    val durationSec = (data["duration"] as? Double)?.toFloat() ?: 0.2f
+                    onVibrationReceived?.invoke(left, right, durationSec)
+                }
             }
         } catch (e: Exception) {
             Log.e("UdpClient", "Error parsing message: " + e.message)

@@ -15,9 +15,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.manette.ui.components.ControllerView
@@ -65,6 +68,18 @@ fun GameScreen(
         }
     }
 
+    // Libération de l'état neutre quand l'app passe en arrière-plan (A5 : aucune touche collée)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                viewModel.releaseAllInputs()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // Connexion automatique selon le mode actif
     LaunchedEffect(Unit) {
         viewModel.connectForCurrentMode()
@@ -107,7 +122,7 @@ fun GameScreen(
                     .crossfade(true)
                     .build(),
                 contentDescription = "Fond personnalisé",
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {

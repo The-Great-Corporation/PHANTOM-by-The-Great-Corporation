@@ -1,0 +1,18 @@
+{
+  "title": "Phantom — par The Great Corporation",
+  "start_server": "▶ DÉMARRER LE SERVEUR PHANTOM",
+  "stop_server": "⏹ ARRÊTER LE SERVEUR",
+  "ip_copied": "IP copiée !",
+  "copy_success": "Adresse IP {ip} copiée dans le presse‑papier.",
+  "footer_slogan": "« The controller you don't hold, the power you command »",
+  "footer_watermark": "TGC Engineering • The Great Corporation © 2026",
+  "help_button": "Aide",
+  "help_title": "Guide d’utilisation PHANTOM",
+  "server_started": "Serveur PHANTOM démarré avec succès !",
+  "server_stopped": "Serveur PHANTOM arrêté.",
+  "dashboard_tab": " 📊 Dashboard & Détection ",
+  "visualizer_tab": " 🎮 Visualiseur Phantom & Logs ",
+  "status_running": "SERVEUR PHANTOM ACTIF",
+  "status_stopped": "SERVEUR ARRÊTÉ",
+  "copy_button": "📋 Copier"
+}

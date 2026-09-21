@@ -48,6 +48,35 @@ class TestServerPipeline(unittest.TestCase):
         self.assertEqual(state.left_stick_x, 0.75)
         self.assertEqual(state.left_stick_y, -0.25)
 
+    def test_gamepad_values_are_clamped_before_native_emulation(self):
+        self.assertEqual(GamepadEmulator._clamp_axis(2.0, -1.0, 1.0), 1.0)
+        self.assertEqual(GamepadEmulator._clamp_axis(-2.0, -1.0, 1.0), -1.0)
+        self.assertEqual(GamepadEmulator._clamp_axis(float("nan"), -1.0, 1.0), 0.0)
+        self.assertEqual(GamepadEmulator._clamp_axis("invalid", -1.0, 1.0), 0.0)
+
+    def test_udp_rejected_client_cannot_send_input(self):
+        async def run():
+            config = self.config | {"connection": {"max_clients": 1, "timeout": 10}}
+            cm = ConnectionManager(config)
+            await cm.start()
+            await cm.connect_client("existing", "udp", "127.0.0.1:1")
+
+            class MockEmulator:
+                def __init__(self):
+                    self.last_state = None
+                async def update_state(self, state):
+                    self.last_state = state
+
+            udp = UDPServer("127.0.0.1", 8888, cm, MockEmulator(), object())
+            message = json.dumps({
+                "type": "input", "client_id": "rejected", "data": {"a": True}
+            }).encode("utf-8")
+            await udp._handle_datagram(message, ("127.0.0.1", 54321))
+            self.assertIsNone(udp.gamepad_emulator.last_state)
+            await cm.stop()
+
+        asyncio.run(run())
+
     def test_udp_server_discover_and_input(self):
         async def run():
             cm = ConnectionManager(self.config)

@@ -8,6 +8,7 @@ import json
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+MAX_MESSAGE_SIZE = 8 * 1024
 
 
 class USBServer:
@@ -96,12 +97,16 @@ class USBServer:
                         break
                     
                     buffer += data.decode('utf-8')
+                    if len(buffer.encode('utf-8')) > MAX_MESSAGE_SIZE:
+                        logger.warning("Closing USB connection with oversized message from %s", address)
+                        break
                     
                     # Process complete messages
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         if line.strip():
-                            await self._handle_message(line.strip(), reader, writer)
+                            connected_id = await self._handle_message(line.strip(), reader, writer)
+                            client_id = connected_id or client_id
                             
                 except asyncio.CancelledError:
                     break
@@ -135,11 +140,13 @@ class USBServer:
                 return
             
             if msg_type == 'connect':
-                await self.connection_manager.connect_client(
+                accepted = await self.connection_manager.connect_client(
                     client_id,
                     'usb',
                     writer.get_extra_info('peername')[0]
                 )
+                if not accepted:
+                    return None
                 self._client_sockets[client_id] = (reader, writer)
                 
                 # Send connection confirmation
@@ -149,12 +156,15 @@ class USBServer:
                 })
                 writer.write((response + '\n').encode('utf-8'))
                 await writer.drain()
+                return client_id
             
             elif msg_type == 'input':
-                await self._handle_input(client_id, data.get('data', {}))
+                if self._client_sockets.get(client_id, (None, None))[1] is writer:
+                    await self._handle_input(client_id, data.get('data', {}))
             
             elif msg_type == 'heartbeat':
-                await self.connection_manager.update_activity(client_id)
+                if self._client_sockets.get(client_id, (None, None))[1] is writer:
+                    await self.connection_manager.update_activity(client_id)
             
             elif msg_type == 'ping':
                 await self._send_pong(client_id, writer)

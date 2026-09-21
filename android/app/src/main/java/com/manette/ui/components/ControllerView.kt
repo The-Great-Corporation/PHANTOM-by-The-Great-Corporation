@@ -1,5 +1,6 @@
 package com.manette.ui.components
 
+import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -7,9 +8,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.manette.config.ButtonPosition
 import com.manette.config.LayoutDefaults
+import com.manette.config.SkinLoader
 import com.manette.ui.theme.*
 
 data class SkinButtonTheme(
@@ -22,6 +25,18 @@ data class SkinButtonTheme(
     val centerColor: Color = Color(0xFF232838)
 )
 
+/**
+ * Charge le thème de skin depuis [SkinLoader] (assets/skins/<skinId>.json).
+ * Conforme à la règle R5 : aucune couleur n'est codée en dur ici.
+ */
+fun getSkinTheme(context: Context, skin: String): SkinButtonTheme =
+    SkinLoader.loadSkin(context, skin)
+
+/**
+ * Surcharge sans Context pour la rétrocompatibilité des appels hors Composable.
+ * Utilise le fallback statique Xbox — à éviter dans le code UI (utiliser la version Context).
+ */
+@Deprecated("Préférer getSkinTheme(context, skin) qui lit depuis les assets")
 fun getSkinTheme(skin: String): SkinButtonTheme {
     return when (skin.lowercase()) {
         "playstation", "ps" -> SkinButtonTheme(
@@ -52,7 +67,7 @@ fun getSkinTheme(skin: String): SkinButtonTheme {
             bumperColor = Color.White.copy(alpha = 0.2f),
             centerColor = Color.White.copy(alpha = 0.15f)
         )
-        else -> SkinButtonTheme( // Xbox Standard
+        else -> SkinButtonTheme(
             aLabel = "A", aColor = Color(0xFF2ECC71),
             bLabel = "B", bColor = Color(0xFFE74C3C),
             xLabel = "X", xColor = Color(0xFF3498DB),
@@ -66,10 +81,12 @@ fun ControllerView(
     modifier: Modifier = Modifier,
     skin: String = "xbox",
     positions: Map<String, ButtonPosition> = emptyMap(),
+    floatingSticks: Boolean = true,
     onButtonPress: (String, Boolean) -> Unit,
     onJoystickMove: (String, Float, Float) -> Unit
 ) {
-    val theme = getSkinTheme(skin)
+    val context = LocalContext.current
+    val theme = getSkinTheme(context, skin)
     val effectivePositions = remember(positions) {
         LayoutDefaults.getEffectivePositions(positions)
     }
@@ -97,6 +114,7 @@ fun ControllerView(
                     shape = RoundedCornerShape(12.dp),
                     defaultColor = theme.bumperColor,
                     fontSize = (14 * pos.size).toInt().coerceAtLeast(9),
+                    hapticCategory = HapticCategory.TRIGGER,
                     onPress = { onButtonPress("left_trigger", true) },
                     onRelease = { onButtonPress("left_trigger", false) }
                 )
@@ -120,6 +138,7 @@ fun ControllerView(
                     shape = RoundedCornerShape(12.dp),
                     defaultColor = theme.bumperColor,
                     fontSize = (14 * pos.size).toInt().coerceAtLeast(9),
+                    hapticCategory = HapticCategory.BUMPER,
                     onPress = { onButtonPress("left_bumper", true) },
                     onRelease = { onButtonPress("left_bumper", false) }
                 )
@@ -143,6 +162,7 @@ fun ControllerView(
                     shape = RoundedCornerShape(10.dp),
                     defaultColor = theme.centerColor,
                     fontSize = (10 * pos.size).toInt().coerceAtLeast(8),
+                    hapticCategory = HapticCategory.CENTER,
                     onPress = { onButtonPress("back", true) },
                     onRelease = { onButtonPress("back", false) }
                 )
@@ -166,6 +186,7 @@ fun ControllerView(
                     shape = RoundedCornerShape(10.dp),
                     defaultColor = theme.centerColor,
                     fontSize = (10 * pos.size).toInt().coerceAtLeast(8),
+                    hapticCategory = HapticCategory.CENTER,
                     onPress = { onButtonPress("start", true) },
                     onRelease = { onButtonPress("start", false) }
                 )
@@ -189,6 +210,7 @@ fun ControllerView(
                     shape = RoundedCornerShape(12.dp),
                     defaultColor = theme.bumperColor,
                     fontSize = (14 * pos.size).toInt().coerceAtLeast(9),
+                    hapticCategory = HapticCategory.BUMPER,
                     onPress = { onButtonPress("right_bumper", true) },
                     onRelease = { onButtonPress("right_bumper", false) }
                 )
@@ -212,6 +234,7 @@ fun ControllerView(
                     shape = RoundedCornerShape(12.dp),
                     defaultColor = theme.bumperColor,
                     fontSize = (14 * pos.size).toInt().coerceAtLeast(9),
+                    hapticCategory = HapticCategory.TRIGGER,
                     onPress = { onButtonPress("right_trigger", true) },
                     onRelease = { onButtonPress("right_trigger", false) }
                 )
@@ -219,20 +242,31 @@ fun ControllerView(
         }
 
         // ── 7. STICK ANALOGIQUE GAUCHE ────────────────────────────────────────
-        effectivePositions["left_stick"]?.let { pos ->
-            val size = (140f * pos.size).dp
-            Box(
+        if (floatingSticks) {
+            // Mode flottant : s'ancre là où le pouce se pose (toute la moitié gauche)
+            FloatingJoystickZone(
                 modifier = Modifier
-                    .offset(
-                        x = (screenW * pos.x - size.value / 2f).dp,
-                        y = (screenH * pos.y - size.value / 2f).dp
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.5f),
+                onMove = { x, y -> onJoystickMove("left", x, y) }
+            )
+        } else {
+            // Mode fixe : respecte la position de l'éditeur de layout
+            effectivePositions["left_stick"]?.let { pos ->
+                val size = (140f * pos.size).dp
+                Box(
+                    modifier = Modifier
+                        .offset(
+                            x = (screenW * pos.x - size.value / 2f).dp,
+                            y = (screenH * pos.y - size.value / 2f).dp
+                        )
+                        .size(size)
+                ) {
+                    JoystickComponent(
+                        size = size.value.toInt(),
+                        onMove = { x, y -> onJoystickMove("left", x, y) }
                     )
-                    .size(size)
-            ) {
-                JoystickComponent(
-                    size = size.value.toInt(),
-                    onMove = { x, y -> onJoystickMove("left", x, y) }
-                )
+                }
             }
         }
 
@@ -255,6 +289,7 @@ fun ControllerView(
                     size = btnSize,
                     shape = RoundedCornerShape(8.dp),
                     defaultColor = theme.dpadColor,
+                    hapticCategory = HapticCategory.DPAD,
                     onPress = { onButtonPress("dpad_up", true) },
                     onRelease = { onButtonPress("dpad_up", false) }
                 )
@@ -264,6 +299,7 @@ fun ControllerView(
                     size = btnSize,
                     shape = RoundedCornerShape(8.dp),
                     defaultColor = theme.dpadColor,
+                    hapticCategory = HapticCategory.DPAD,
                     onPress = { onButtonPress("dpad_down", true) },
                     onRelease = { onButtonPress("dpad_down", false) }
                 )
@@ -273,6 +309,7 @@ fun ControllerView(
                     size = btnSize,
                     shape = RoundedCornerShape(8.dp),
                     defaultColor = theme.dpadColor,
+                    hapticCategory = HapticCategory.DPAD,
                     onPress = { onButtonPress("dpad_left", true) },
                     onRelease = { onButtonPress("dpad_left", false) }
                 )
@@ -282,6 +319,7 @@ fun ControllerView(
                     size = btnSize,
                     shape = RoundedCornerShape(8.dp),
                     defaultColor = theme.dpadColor,
+                    hapticCategory = HapticCategory.DPAD,
                     onPress = { onButtonPress("dpad_right", true) },
                     onRelease = { onButtonPress("dpad_right", false) }
                 )

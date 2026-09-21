@@ -14,6 +14,7 @@ except ImportError:
     logging.warning("pybluez not installed. Bluetooth server will not work.")
 
 logger = logging.getLogger(__name__)
+MAX_MESSAGE_SIZE = 8 * 1024
 
 
 class BluetoothServer:
@@ -96,11 +97,14 @@ class BluetoothServer:
         buffer = ""
         
         try:
-            await self.connection_manager.connect_client(
+            accepted = await self.connection_manager.connect_client(
                 client_id,
                 'bluetooth',
                 str(address[0])
             )
+            if not accepted:
+                client_socket.close()
+                return
             
             self._client_sockets[client_id] = client_socket
             
@@ -113,6 +117,9 @@ class BluetoothServer:
                         break
                     
                     buffer += data.decode('utf-8')
+                    if len(buffer.encode('utf-8')) > MAX_MESSAGE_SIZE:
+                        logger.warning("Closing Bluetooth connection with oversized message from %s", address)
+                        break
                     
                     # Process complete messages
                     while '\n' in buffer:

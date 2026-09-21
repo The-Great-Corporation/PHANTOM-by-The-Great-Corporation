@@ -1,0 +1,15 @@
+{
+  "skin_id": "cyberpunk",
+  "display_name": "Cyberpunk Néon",
+  "description": "Skin futuriste néon — cyan électrique, rouge vif, vert acide, jaune néon.",
+  "schema_version": 2,
+  "buttons": {
+    "a": { "label": "A", "color": "#00E5FF" },
+    "b": { "label": "B", "color": "#FF0055" },
+    "x": { "label": "X", "color": "#00FF66" },
+    "y": { "label": "Y", "color": "#FFCC00" }
+  },
+  "dpad_color":   "#1E2638",
+  "bumper_color": "#1A2030",
+  "center_color": "#141826"
+}

@@ -4,7 +4,7 @@ Haptic Feedback Manager - Handles vibration feedback to clients
 
 import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -28,7 +28,12 @@ class HapticFeedbackManager:
         self.config = config
         self.enabled = config.get('gamepad', {}).get('vibration_enabled', True)
         self.active_vibrations: Dict[str, VibrationCommand] = {}
+        self._vibration_senders: list = []
         self._cleanup_task: Optional[asyncio.Task] = None
+
+    def register_sender(self, sender: Callable):
+        """Register a protocol sender: sender(client_id, left, right, duration)."""
+        self._vibration_senders.append(sender)
         
     async def start(self):
         """Start the haptic feedback manager."""
@@ -47,8 +52,8 @@ class HapticFeedbackManager:
         
         self.active_vibrations.clear()
     
-    async def trigger_vibration(self, client_id: str, left_motor: float, right_motor: float, duration: float):
-        """Trigger vibration for a specific client."""
+    async def trigger_vibration(self, client_id: str, left_motor: float, right_motor: float, duration: float = 0.2):
+        """Trigger vibration for a specific client and dispatch to protocol senders."""
         if not self.enabled:
             return
         
@@ -71,8 +76,13 @@ class HapticFeedbackManager:
         self.active_vibrations[client_id] = command
         logger.debug(f"Vibration triggered for {client_id}: L={left_motor}, R={right_motor}, dur={duration}s")
         
-        # This would be sent to the client via the connection manager
-        # The actual sending is handled by the protocol servers
+        for sender in self._vibration_senders:
+            try:
+                res = sender(client_id, left_motor, right_motor, duration)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception as e:
+                logger.error(f"Error in vibration sender callback: {e}")
     
     async def cancel_vibration(self, client_id: str):
         """Cancel active vibration for a client."""

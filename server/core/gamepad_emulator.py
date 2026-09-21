@@ -1,10 +1,12 @@
 """
-Gamepad Emulator - Handles gamepad emulation using vgamepad
+Gamepad Emulator - Handles gamepad emulation using vgamepad with multi-slot and watchdog support
 """
 
 import asyncio
 import logging
-from typing import Optional
+import math
+import time
+from typing import Optional, Dict, List, Callable, Any
 from dataclasses import dataclass
 
 try:
@@ -45,19 +47,100 @@ class GamepadState:
     right_stick_x: float = 0.0  # -1.0 to 1.0
     right_stick_y: float = 0.0  # -1.0 to 1.0
 
+    def is_neutral(self) -> bool:
+        """Return True if no buttons or analog axes are active."""
+        return not (
+            self.a or self.b or self.x or self.y or
+            self.left_bumper or self.right_bumper or
+            self.back or self.start or
+            self.left_thumb or self.right_thumb or
+            self.dpad_up or self.dpad_down or self.dpad_left or self.dpad_right or
+            abs(self.left_trigger) > 0.01 or abs(self.right_trigger) > 0.01 or
+            abs(self.left_stick_x) > 0.01 or abs(self.left_stick_y) > 0.01 or
+            abs(self.right_stick_x) > 0.01 or abs(self.right_stick_y) > 0.01
+        )
+
 
 class GamepadEmulator:
-    """Emulates a virtual gamepad using vgamepad."""
+    """Emulates virtual gamepads using vgamepad with multi-controller, vibration and watchdog support."""
     
     def __init__(self, config: dict):
         self.config = config
-        self.gamepad: Optional[vg.VX360Gamepad] = None
-        self.current_state = GamepadState()
+        self.gamepads: Dict[int, Any] = {}
+        self.client_slots: Dict[str, int] = {}
+        self.slot_states: Dict[int, GamepadState] = {}
+        self.slot_last_input: Dict[int, float] = {}
+        self.vibration_listeners: List[Callable[[int, float, float], None]] = []
+        self._notification_callbacks: Dict[int, Any] = {}
+        
+        self.emulation_type = config.get('gamepad', {}).get('emulation_type', 'xbox360').lower()
         self.deadzone_left = config.get('gamepad', {}).get('deadzone_left', 0.1)
         self.deadzone_right = config.get('gamepad', {}).get('deadzone_right', 0.1)
         self.vibration_enabled = config.get('gamepad', {}).get('vibration_enabled', True)
-        self._initialized = False
+        self.input_timeout = config.get('gamepad', {}).get('input_timeout', 1.0)
         
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._initialized = False
+
+    @property
+    def gamepad(self):
+        """Backward-compatible property referencing Player 1."""
+        return self.gamepads.get(1)
+
+    @gamepad.setter
+    def gamepad(self, val):
+        if val is not None:
+            self.gamepads[1] = val
+        elif 1 in self.gamepads:
+            del self.gamepads[1]
+
+    @property
+    def current_state(self) -> GamepadState:
+        """Backward-compatible property referencing Player 1 state."""
+        return self.slot_states.get(1, GamepadState())
+
+    @current_state.setter
+    def current_state(self, val: GamepadState):
+        self.slot_states[1] = val
+        
+    def _create_pad_instance(self, slot: int):
+        """Instantiate a virtual gamepad for a given slot."""
+        if vg is None:
+            return None
+        try:
+            if self.emulation_type in ['dualshock4', 'ds4', 'ps4']:
+                pad = vg.VDS4Gamepad()
+                logger.info(f"DualShock 4 virtual gamepad initialized for slot {slot}")
+            else:
+                pad = vg.VX360Gamepad()
+                if self.vibration_enabled:
+                    def _on_vib(client, target, large_motor, small_motor, led_number, user_data):
+                        self._handle_vibration_notification(slot, large_motor, small_motor)
+                    pad.register_notification(_on_vib)
+                    self._notification_callbacks[slot] = _on_vib
+                logger.info(f"Xbox 360 virtual gamepad initialized for slot {slot}")
+            return pad
+        except Exception as e:
+            logger.error(f"Failed to create gamepad for slot {slot}: {e}")
+            return None
+
+    def _handle_vibration_notification(self, slot: int, large_motor: int, small_motor: int):
+        """Dispatch native rumble notifications from Windows games."""
+        left = large_motor / 255.0
+        right = small_motor / 255.0
+        logger.debug(f"Native XInput vibration [Slot {slot}]: L={left:.2f}, R={right:.2f}")
+        for listener in self.vibration_listeners:
+            try:
+                res = listener(slot, left, right)
+                if asyncio.iscoroutine(res):
+                    asyncio.create_task(res)
+            except Exception as e:
+                logger.error(f"Error in vibration listener: {e}")
+
+    def register_vibration_listener(self, listener: Callable[[int, float, float], None]):
+        """Register a callback for vibration events: listener(slot, left_motor, right_motor)."""
+        self.vibration_listeners.append(listener)
+
     async def initialize(self):
         """Initialize the gamepad emulator."""
         if vg is None:
@@ -65,98 +148,189 @@ class GamepadEmulator:
             return
         
         try:
-            emulation_type = self.config.get('gamepad', {}).get('emulation_type', 'xbox360').lower()
-            if emulation_type in ['dualshock4', 'ds4', 'ps4']:
-                self.gamepad = vg.VDS4Gamepad()
-                logger.info("DualShock 4 gamepad emulator initialized successfully")
+            primary_pad = self._create_pad_instance(1)
+            if primary_pad:
+                self.gamepads[1] = primary_pad
+                self.slot_states[1] = GamepadState()
+                self.slot_last_input[1] = time.time()
+                self._initialized = True
+                logger.info("Primary virtual gamepad (Slot 1) initialized successfully")
             else:
-                self.gamepad = vg.VX360Gamepad()
-                logger.info("Xbox 360 gamepad emulator initialized successfully")
-            self._initialized = True
+                self._initialized = False
+
+            if self._initialized:
+                self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         except Exception as e:
             logger.error(f"Failed to initialize gamepad emulator: {e}")
             self._initialized = False
     
     async def cleanup(self):
-        """Clean up gamepad resources."""
-        if self.gamepad and self._initialized:
+        """Clean up all gamepad resources."""
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
             try:
-                # Reset all buttons and sticks
-                self._reset_gamepad()
-                self.gamepad.update()
-                logger.info("Gamepad emulator cleaned up")
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
+            self._watchdog_task = None
+
+        for slot, pad in list(self.gamepads.items()):
+            try:
+                self._reset_gamepad(pad)
+                pad.update()
+                logger.info(f"Gamepad slot {slot} cleaned up")
             except Exception as e:
-                logger.error(f"Error during cleanup: {e}")
+                logger.error(f"Error during cleanup of slot {slot}: {e}")
         
+        self.gamepads.clear()
+        self.client_slots.clear()
+        self.slot_states.clear()
+        self.slot_last_input.clear()
+        self._notification_callbacks.clear()
         self._initialized = False
+
+    def get_slot_for_client(self, client_id: Optional[str]) -> int:
+        """Assign or retrieve an XInput slot (1..4) for a given client."""
+        if not client_id:
+            return 1
+        if client_id in self.client_slots:
+            return self.client_slots[client_id]
+        
+        occupied = set(self.client_slots.values())
+        for slot in range(1, 5):
+            if slot not in occupied:
+                self.client_slots[client_id] = slot
+                if slot not in self.gamepads and self._initialized:
+                    pad = self._create_pad_instance(slot)
+                    if pad:
+                        self.gamepads[slot] = pad
+                self.slot_states[slot] = GamepadState()
+                self.slot_last_input[slot] = time.time()
+                logger.info(f"Assigned Player {slot} to client {client_id}")
+                return slot
+        
+        logger.warning(f"All 4 player slots occupied. Routing client {client_id} to Slot 1")
+        self.client_slots[client_id] = 1
+        return 1
+
+    def release_client(self, client_id: str):
+        """Release the gamepad slot assigned to a client and reset inputs."""
+        if client_id in self.client_slots:
+            slot = self.client_slots.pop(client_id)
+            logger.info(f"Released Player {slot} for disconnected client {client_id}")
+            self.reset_slot(slot)
+
+    def reset_slot(self, slot: int):
+        """Reset inputs on a specific slot to neutral."""
+        pad = self.gamepads.get(slot)
+        if pad:
+            try:
+                self._reset_gamepad(pad)
+                pad.update()
+            except Exception as e:
+                logger.error(f"Error resetting gamepad slot {slot}: {e}")
+        self.slot_states[slot] = GamepadState()
+        self.slot_last_input[slot] = time.time()
+
+    def reset_client_state(self, client_id: Optional[str] = None):
+        """Reset the gamepad associated with a client (or Player 1 if None)."""
+        slot = self.client_slots.get(client_id, 1) if client_id else 1
+        self.reset_slot(slot)
+
+    async def _watchdog_loop(self):
+        """Periodically check for inactive clients holding buttons and reset to neutral."""
+        while True:
+            try:
+                await asyncio.sleep(0.2)
+                now = time.time()
+                for slot, pad in list(self.gamepads.items()):
+                    last_time = self.slot_last_input.get(slot, 0)
+                    state = self.slot_states.get(slot)
+                    if state and not state.is_neutral():
+                        if (now - last_time) > self.input_timeout:
+                            logger.info(f"Watchdog: Player {slot} inactive for >{self.input_timeout}s with active inputs. Auto-resetting to neutral.")
+                            self.reset_slot(slot)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in gamepad watchdog loop: {e}")
     
-    def _reset_gamepad(self):
+    def _reset_gamepad(self, pad=None):
         """Reset all gamepad inputs to default state."""
-        if not self.gamepad:
+        pad = pad or self.gamepad
+        if not pad or vg is None:
             return
             
-        # Reset buttons
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_B)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_START)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB)
-        
-        # Reset D-pad
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT)
-        self.gamepad.reset_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT)
-        
-        # Reset triggers
-        self.gamepad.left_trigger(0)
-        self.gamepad.right_trigger(0)
-        
-        # Reset sticks
-        self.gamepad.left_joystick(0, 0)
-        self.gamepad.right_joystick(0, 0)
+        if hasattr(pad, 'reset'):
+            pad.reset()
+        else:
+            pad.left_trigger(0)
+            pad.right_trigger(0)
+            pad.left_joystick(0, 0)
+            pad.right_joystick(0, 0)
     
     def _apply_deadzone(self, value: float, deadzone: float) -> float:
         """Apply deadzone to analog input."""
         if abs(value) < deadzone:
             return 0.0
-        # Scale the remaining range
         scale = 1.0 / (1.0 - deadzone)
         return (value - (deadzone if value > 0 else -deadzone)) * scale
+
+    @staticmethod
+    def _clamp_axis(value, minimum: float, maximum: float) -> float:
+        """Return a finite numeric controller value within its protocol range."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0.0
+        value = float(value)
+        if not math.isfinite(value):
+            return 0.0
+        return max(minimum, min(maximum, value))
     
-    async def update_state(self, state: GamepadState):
+    async def update_state(self, state: GamepadState, client_id: Optional[str] = None):
         """Update the gamepad state from input data."""
-        if not self.gamepad or not self._initialized:
+        if not self._initialized:
             logger.warning("Gamepad not initialized, cannot update state")
             return
         
+        slot = self.get_slot_for_client(client_id)
+        pad = self.gamepads.get(slot)
+        if not pad:
+            pad = self._create_pad_instance(slot)
+            if pad:
+                self.gamepads[slot] = pad
+            else:
+                logger.warning(f"Cannot update state: no pad for slot {slot}")
+                return
+        
         try:
+            state.left_trigger = self._clamp_axis(state.left_trigger, 0.0, 1.0)
+            state.right_trigger = self._clamp_axis(state.right_trigger, 0.0, 1.0)
+            state.left_stick_x = self._clamp_axis(state.left_stick_x, -1.0, 1.0)
+            state.left_stick_y = self._clamp_axis(state.left_stick_y, -1.0, 1.0)
+            state.right_stick_x = self._clamp_axis(state.right_stick_x, -1.0, 1.0)
+            state.right_stick_y = self._clamp_axis(state.right_stick_y, -1.0, 1.0)
+            
             # Update buttons
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_A, state.a)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_B, state.b)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_X, state.x)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_Y, state.y)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER, state.left_bumper)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER, state.right_bumper)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK, state.back)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_START, state.start)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB, state.left_thumb)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB, state.right_thumb)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_A, state.a)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_B, state.b)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_X, state.x)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_Y, state.y)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER, state.left_bumper)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER, state.right_bumper)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK, state.back)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_START, state.start)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB, state.left_thumb)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB, state.right_thumb)
             
             # Update D-pad
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP, state.dpad_up)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN, state.dpad_down)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT, state.dpad_left)
-            self._update_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT, state.dpad_right)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP, state.dpad_up)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN, state.dpad_down)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT, state.dpad_left)
+            self._update_button(pad, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT, state.dpad_right)
             
             # Update triggers (0-255)
-            self.gamepad.left_trigger(int(state.left_trigger * 255))
-            self.gamepad.right_trigger(int(state.right_trigger * 255))
+            pad.left_trigger(int(state.left_trigger * 255))
+            pad.right_trigger(int(state.right_trigger * 255))
             
             # Update analog sticks with deadzone
             left_x = self._apply_deadzone(state.left_stick_x, self.deadzone_left)
@@ -164,35 +338,32 @@ class GamepadEmulator:
             right_x = self._apply_deadzone(state.right_stick_x, self.deadzone_right)
             right_y = self._apply_deadzone(state.right_stick_y, self.deadzone_right)
             
-            self.gamepad.left_joystick(int(left_x * 32767), int(left_y * 32767))
-            self.gamepad.right_joystick(int(right_x * 32767), int(right_y * 32767))
+            pad.left_joystick(int(left_x * 32767), int(left_y * 32767))
+            pad.right_joystick(int(right_x * 32767), int(right_y * 32767))
             
-            # Apply changes
-            self.gamepad.update()
-            self.current_state = state
+            pad.update()
+            self.slot_states[slot] = state
+            self.slot_last_input[slot] = time.time()
             
         except Exception as e:
-            logger.error(f"Error updating gamepad state: {e}")
+            logger.error(f"Error updating gamepad state (slot {slot}): {e}")
     
-    def _update_button(self, button, pressed: bool):
-        """Update a single button state."""
+    def _update_button(self, pad, button, pressed: bool):
+        """Update a single button state on given pad."""
+        if not pad or vg is None:
+            return
         if pressed:
-            self.gamepad.press_button(button)
+            pad.press_button(button)
         else:
-            self.gamepad.release_button(button)
+            pad.release_button(button)
     
-    async def set_vibration(self, left_motor: float, right_motor: float):
-        """Set vibration intensity (0.0 to 1.0)."""
-        if not self.gamepad or not self._initialized or not self.vibration_enabled:
+    async def set_vibration(self, left_motor: float, right_motor: float, slot: int = 1):
+        """Set vibration intensity (0.0 to 1.0) and dispatch to listeners."""
+        if not self._initialized or not self.vibration_enabled:
             return
         
-        try:
-            # vgamepad doesn't directly support vibration, but we can log it
-            # for future implementation with ViGEmBus directly
-            logger.debug(f"Vibration: left={left_motor}, right={right_motor}")
-        except Exception as e:
-            logger.error(f"Error setting vibration: {e}")
+        self._handle_vibration_notification(slot, int(left_motor * 255), int(right_motor * 255))
     
-    def get_current_state(self) -> GamepadState:
-        """Get the current gamepad state."""
-        return self.current_state
+    def get_current_state(self, slot: int = 1) -> GamepadState:
+        """Get the current gamepad state for a given slot (default Player 1)."""
+        return self.slot_states.get(slot, GamepadState())

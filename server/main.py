@@ -88,6 +88,21 @@ class VirtualGamepadServer:
         await self.connection_manager.start()
         await self.haptic_feedback.start()
         
+        # Wire up disconnect callback to release/reset virtual gamepad
+        self.connection_manager.register_disconnect_callback(self.gamepad_emulator.release_client)
+        
+        # Wire up native XInput rumble callback to dispatch to connected clients
+        def _on_gamepad_vibration(slot, left, right):
+            for cid, s in self.gamepad_emulator.client_slots.items():
+                if s == slot:
+                    asyncio.create_task(self.haptic_feedback.trigger_vibration(cid, left, right, duration=0.2))
+                    break
+            else:
+                for cid in self.connection_manager.clients.keys():
+                    asyncio.create_task(self.haptic_feedback.trigger_vibration(cid, left, right, duration=0.2))
+
+        self.gamepad_emulator.register_vibration_listener(_on_gamepad_vibration)
+        
         # Initialize keyboard/mouse handler if enabled
         if self.config.get('keyboard_mouse', {}).get('enabled', False):
             await self.keyboard_mouse.initialize()

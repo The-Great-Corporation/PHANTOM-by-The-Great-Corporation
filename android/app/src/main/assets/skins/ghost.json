@@ -1,0 +1,15 @@
+{
+  "skin_id": "ghost",
+  "display_name": "Ghost / Minimal",
+  "description": "Skin épuré translucide — blanc fantôme, zéro distraction. Idéal pour fond personnalisé.",
+  "schema_version": 2,
+  "buttons": {
+    "a": { "label": "A", "color": "#FFFFFF33" },
+    "b": { "label": "B", "color": "#FFFFFF33" },
+    "x": { "label": "X", "color": "#FFFFFF33" },
+    "y": { "label": "Y", "color": "#FFFFFF33" }
+  },
+  "dpad_color":   "#FFFFFF26",
+  "bumper_color": "#FFFFFF33",
+  "center_color": "#FFFFFF26"
+}

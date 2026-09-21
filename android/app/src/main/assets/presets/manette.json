@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "preset_id": "manette",
+  "preset_name": "Manette",
+  "description": "Layout par défaut — manette Xbox standard. Positions normalisées 0.0–1.0 relatives aux dimensions de l'écran.",
+  "button_positions": {
+    "btn_lt":    { "x": 0.08, "y": 0.12, "size": 1.0 },
+    "btn_lb":    { "x": 0.18, "y": 0.12, "size": 1.0 },
+    "btn_back":  { "x": 0.44, "y": 0.12, "size": 1.0 },
+    "btn_start": { "x": 0.56, "y": 0.12, "size": 1.0 },
+    "btn_rb":    { "x": 0.82, "y": 0.12, "size": 1.0 },
+    "btn_rt":    { "x": 0.92, "y": 0.12, "size": 1.0 },
+    "left_stick":  { "x": 0.13, "y": 0.65, "size": 1.0 },
+    "dpad":        { "x": 0.32, "y": 0.65, "size": 1.0 },
+    "right_stick": { "x": 0.68, "y": 0.65, "size": 1.0 },
+    "abxy":        { "x": 0.88, "y": 0.65, "size": 1.0 }
+  },
+  "button_mappings": {
+    "a": "button_a",
+    "b": "button_b",
+    "x": "button_x",
+    "y": "button_y",
+    "left_bumper":  "button_l1",
+    "right_bumper": "button_r1",
+    "back":         "button_select",
+    "start":        "button_start",
+    "left_thumb":   "button_l3",
+    "right_thumb":  "button_r3",
+    "dpad_up":    "dpad_up",
+    "dpad_down":  "dpad_down",
+    "dpad_left":  "dpad_left",
+    "dpad_right": "dpad_right"
+  },
+  "joystick_settings": {
+    "left":  { "enabled": true, "sensitivity": 1.0, "deadzone": 0.1, "invert_x": false, "invert_y": false },
+    "right": { "enabled": true, "sensitivity": 1.0, "deadzone": 0.1, "invert_x": false, "invert_y": false }
+  },
+  "sensitivity_settings": {
+    "overall": 1.0,
+    "joystick": 1.0,
+    "trigger": 1.0,
+    "gyro": 1.0
+  },
+  "deadzone_settings": {
+    "left_stick": 0.1,
+    "right_stick": 0.1,
+    "left_trigger": 0.05,
+    "right_trigger": 0.05
+  },
+  "skin": "xbox"
+}

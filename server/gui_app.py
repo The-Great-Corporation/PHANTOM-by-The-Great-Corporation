@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Phantom Server Suite - by The Great Corporation
 Modern Windows GUI for Server Management & Live Gamepad Visualizer
@@ -15,6 +15,30 @@ import logging
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
+import collections
+import pathlib
+
+# Load configuration and translations
+from config_loader import load_config
+
+def load_translations(lang: str):
+    i18n_path = pathlib.Path(__file__).parent.parent / 'i18n' / f"{lang}.json"
+    if i18n_path.is_file():
+        with open(i18n_path, encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+AppConfig = load_config()
+Translations = load_translations(AppConfig.language)
+
+# Import custom toast notification
+from ui.toast import Toast
+
+import collections
+import pathlib
+
+
+
 
 # Ensure current dir is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -48,28 +72,40 @@ def get_local_ip():
 
 
 class TextLogHandler(logging.Handler):
-    """Logging handler that redirects logs to a Tkinter Text widget."""
+    """Logging handler that redirects logs to a Tkinter Text widget.
+    It keeps only the last ``AppConfig.log_retention`` lines in the widget
+    and appends older lines to ``logs/server.log``.
+    """
     def __init__(self, text_widget):
         super().__init__()
         self.text_widget = text_widget
+        self.buffer = collections.deque(maxlen=AppConfig.log_retention)
+        self.log_file = pathlib.Path(__file__).parent.parent / "logs" / "server.log"
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
     def emit(self, record):
         msg = self.format(record)
-        def append():
-            try:
-                self.text_widget.configure(state='normal')
-                self.text_widget.insert(tk.END, msg + '\n')
-                self.text_widget.see(tk.END)
-                self.text_widget.configure(state='disabled')
-            except Exception:
-                pass
-        self.text_widget.after(0, append)
+        # Append to buffer; if buffer is full, the leftmost entry will be dropped on next append.
+        if len(self.buffer) == AppConfig.log_retention:
+            # Write the oldest line to file before it gets discarded.
+            oldest = self.buffer[0]
+            with open(self.log_file, "a", encoding="utf-8") as f:
+                f.write(oldest + "\n")
+        self.buffer.append(msg)
+        # Refresh UI widget on the main thread.
+        def refresh():
+            self.text_widget.configure(state='normal')
+            self.text_widget.delete('1.0', tk.END)
+            self.text_widget.insert(tk.END, "\n".join(self.buffer))
+            self.text_widget.see(tk.END)
+            self.text_widget.configure(state='disabled')
+        self.text_widget.after(0, refresh)
 
 
 class PhantomServerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Phantom — by The Great Corporation")
+        self.root.title(Translations["title"])
         self.root.geometry("960x680")
         self.root.minsize(900, 620)
         self.root.configure(bg=BG_COLOR)
@@ -114,24 +150,28 @@ class PhantomServerApp:
         status_box = tk.Frame(header_frame, bg=BG_COLOR)
         status_box.pack(side=tk.RIGHT)
 
+        help_btn = tk.Button(status_box, text=Translations.get("help_button", "Help"), font=("Segoe UI", 9, "bold"),
+                             bg=CARD_BG, fg=TEXT_PRIMARY, bd=1, relief="solid", command=self._show_help, takefocus=True)
+        help_btn.pack(side=tk.LEFT, padx=(0, 20))
+
         self.status_dot = tk.Label(status_box, text="●", font=("Segoe UI", 16), fg=ERROR_COLOR, bg=BG_COLOR)
         self.status_dot.pack(side=tk.LEFT, padx=6)
 
-        self.status_label = tk.Label(status_box, text="SERVEUR ARRÊTÉ", font=("Segoe UI", 11, "bold"), fg=TEXT_SECONDARY, bg=BG_COLOR)
+        self.status_label = tk.Label(status_box, text=Translations["status_stopped"], font=("Segoe UI", 11, "bold"), fg=TEXT_SECONDARY, bg=BG_COLOR)
         self.status_label.pack(side=tk.LEFT)
 
     def _build_tabs(self):
-        self.notebook = ttk.Notebook(self.root)
+        self.notebook = ttk.Notebook(self.root, takefocus=True)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
 
         # Tab 1: Dashboard & Connection
         self.tab_dashboard = tk.Frame(self.notebook, bg=BG_COLOR)
-        self.notebook.add(self.tab_dashboard, text=" 📊 Dashboard & Détection ")
+        self.notebook.add(self.tab_dashboard, text=Translations["dashboard_tab"])
         self._build_dashboard_tab()
 
         # Tab 2: Live Gamepad Visualizer & Logs
         self.tab_visualizer = tk.Frame(self.notebook, bg=BG_COLOR)
-        self.notebook.add(self.tab_visualizer, text=" 🎮 Visualiseur Phantom & Logs ")
+        self.notebook.add(self.tab_visualizer, text=Translations["visualizer_tab"])
         self._build_visualizer_tab()
 
     def _build_dashboard_tab(self):
@@ -157,8 +197,8 @@ class PhantomServerApp:
         self.ip_entry.configure(state="readonly")
         self.ip_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6)
 
-        copy_btn = tk.Button(ip_box, text="📋 Copier", font=("Segoe UI", 9, "bold"), bg=ACCENT_PRIMARY, fg="#000",
-                             bd=0, activebackground=BTN_HOVER, padx=12, command=self._copy_ip)
+        copy_btn = tk.Button(ip_box, text=Translations["copy_button"], font=("Segoe UI", 9, "bold"), bg=ACCENT_PRIMARY, fg="#000",
+                             bd=0, activebackground=BTN_HOVER, padx=12, command=self._copy_ip, takefocus=True)
         copy_btn.pack(side=tk.LEFT, padx=(8, 0), ipady=6)
 
         # Card 2: Server Ports & Services
@@ -184,9 +224,9 @@ class PhantomServerApp:
         btn_frame = tk.Frame(left_col, bg=BG_COLOR, pady=10)
         btn_frame.pack(fill=tk.X)
 
-        self.start_btn = tk.Button(btn_frame, text="▶ DÉMARRER LE SERVEUR PHANTOM", font=("Segoe UI", 12, "bold"),
+        self.start_btn = tk.Button(btn_frame, text=Translations["start_server"], font=("Segoe UI", 12, "bold"),
                                    bg=SUCCESS_COLOR, fg="#000000", bd=0, relief="flat", pady=10,
-                                   command=self.toggle_server)
+                                   command=self.toggle_server, takefocus=True)
         self.start_btn.pack(fill=tk.X)
 
         # Right Column: Connected Clients
@@ -197,7 +237,7 @@ class PhantomServerApp:
                                      font=("Segoe UI", 11, "bold"), padx=16, pady=16, bd=1, relief="solid")
         clients_card.pack(fill=tk.BOTH, expand=True)
 
-        self.clients_tree = ttk.Treeview(clients_card, columns=("ID", "Protocole", "Adresse", "Latence"), show="headings", height=8)
+        self.clients_tree = ttk.Treeview(clients_card, columns=("ID", "Protocole", "Adresse", "Latence"), show="headings", height=8, takefocus=True)
         self.clients_tree.heading("ID", text="Appareil")
         self.clients_tree.heading("Protocole", text="Protocole")
         self.clients_tree.heading("Adresse", text="Adresse IP")
@@ -241,18 +281,36 @@ class PhantomServerApp:
         footer = tk.Frame(self.root, bg=BG_COLOR, padx=20, pady=8)
         footer.pack(fill=tk.X, side=tk.BOTTOM)
 
-        slogan = tk.Label(footer, text="« The controller you don't hold, the power you command »",
+        slogan = tk.Label(footer, text=Translations["footer_slogan"],
                           font=("Segoe UI", 9, "italic"), fg=TEXT_SECONDARY, bg=BG_COLOR)
         slogan.pack(side=tk.LEFT)
 
-        watermark = tk.Label(footer, text="TGC Engineering • The Great Corporation © 2026",
+        watermark = tk.Label(footer, text=Translations["footer_watermark"],
                              font=("Segoe UI", 9, "bold"), fg="#4B5263", bg=BG_COLOR)
         watermark.pack(side=tk.RIGHT)
 
     def _copy_ip(self):
         self.root.clipboard_clear()
         self.root.clipboard_append(self.local_ip)
-        messagebox.showinfo("Copié !", f"Adresse IP {self.local_ip} copiée dans le presse-papier.")
+        Toast(self.root, Translations["ip_copied"], duration=AppConfig.toast_duration)
+
+    def _show_help(self):
+        help_win = tk.Toplevel(self.root)
+        help_win.title(Translations.get("help_title", "Help"))
+        help_win.geometry("600x500")
+        help_win.configure(bg=BG_COLOR)
+        
+        text_widget = tk.Text(help_win, bg=CARD_BG, fg=TEXT_PRIMARY, font=("Segoe UI", 10), wrap="word", padx=10, pady=10)
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        try:
+            with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "user_guide.md"), "r", encoding="utf-8") as f:
+                content = f.read()
+            text_widget.insert("1.0", content)
+        except Exception as e:
+            text_widget.insert("1.0", f"Error loading help: {e}")
+            
+        text_widget.configure(state="disabled")
 
     def _draw_gamepad_base(self):
         self.canvas.delete("all")
@@ -314,20 +372,18 @@ class PhantomServerApp:
             client_ids = set(clients.keys())
 
             for item in current_items:
-                cid = self.clients_tree.item(item)['values'][0]
-                if cid not in client_ids:
+                if item not in client_ids:
                     self.clients_tree.delete(item)
 
-            existing_cids = [self.clients_tree.item(i)['values'][0] for i in self.clients_tree.get_children()]
+            existing_cids = set(self.clients_tree.get_children())
             for cid, c in clients.items():
                 lat_str = f"{c.latency_ms:.1f} ms" if c.latency_ms > 0 else "< 1 ms"
                 display_name = "Phantom (" + cid[:12] + ")"
                 if cid in existing_cids:
-                    for i in self.clients_tree.get_children():
-                        if self.clients_tree.item(i)['values'][0] == cid:
-                            self.clients_tree.item(i, values=(display_name, c.protocol.upper(), c.address, lat_str))
+                    self.clients_tree.item(cid, values=(display_name, c.protocol.upper(), c.address, lat_str))
                 else:
-                    self.clients_tree.insert("", tk.END, values=(display_name, c.protocol.upper(), c.address, lat_str))
+                    self.clients_tree.insert("", tk.END, iid=cid,
+                                             values=(display_name, c.protocol.upper(), c.address, lat_str))
 
         self.root.after(33, self._update_visualizer_loop)
 
@@ -385,14 +441,14 @@ class PhantomServerApp:
         self.server_thread.start()
 
         self.status_dot.configure(fg=SUCCESS_COLOR)
-        self.status_label.configure(text="SERVEUR PHANTOM ACTIF", fg=SUCCESS_COLOR)
-        self.start_btn.configure(text="⏹ ARRÊTER LE SERVEUR", bg=ERROR_COLOR)
+        self.status_label.configure(text=Translations["status_running"], fg=SUCCESS_COLOR)
+        self.start_btn.configure(text=Translations["stop_server"], bg=ERROR_COLOR)
 
         for key, lbl in self.proto_labels.items():
             port = "8888" if key == "udp" else ("8889" if key == "ws" else ("8890" if key == "usb" else "8887"))
             lbl.configure(text=f"[{port}] Actif ✔", fg=SUCCESS_COLOR)
 
-        logging.info("Serveur PHANTOM by TGC démarré avec succès !")
+        logging.info(Translations["server_started"])
 
     def _stop_server_thread(self):
         if self.server and self.server_loop:
@@ -400,14 +456,14 @@ class PhantomServerApp:
 
         self.is_running = False
         self.status_dot.configure(fg=ERROR_COLOR)
-        self.status_label.configure(text="SERVEUR ARRÊTÉ", fg=TEXT_SECONDARY)
-        self.start_btn.configure(text="▶ DÉMARRER LE SERVEUR PHANTOM", bg=SUCCESS_COLOR)
+        self.status_label.configure(text=Translations["status_stopped"], fg=TEXT_SECONDARY)
+        self.start_btn.configure(text=Translations["start_server"], bg=SUCCESS_COLOR)
 
         for key, lbl in self.proto_labels.items():
             port = "8888" if key == "udp" else ("8889" if key == "ws" else ("8890" if key == "usb" else "8887"))
             lbl.configure(text=f"[{port}] Inactif", fg=TEXT_SECONDARY)
 
-        logging.info("Serveur PHANTOM arrêté.")
+        logging.info(Translations["server_stopped"])
 
 
 def main():

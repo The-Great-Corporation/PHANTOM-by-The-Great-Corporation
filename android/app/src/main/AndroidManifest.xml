@@ -41,7 +41,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/Theme.Manette"
-            android:screenOrientation="unspecified"
+            android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

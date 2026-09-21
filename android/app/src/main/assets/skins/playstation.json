@@ -1,0 +1,15 @@
+{
+  "skin_id": "playstation",
+  "display_name": "PlayStation",
+  "description": "Layout Sony PlayStation — symboles ✕ ◯ ▢ △ et couleurs officielles.",
+  "schema_version": 2,
+  "buttons": {
+    "a": { "label": "✕", "color": "#2980B9" },
+    "b": { "label": "◯", "color": "#E74C3C" },
+    "x": { "label": "▢", "color": "#E91E63" },
+    "y": { "label": "△", "color": "#2ECC71" }
+  },
+  "dpad_color":   "#353B4E",
+  "bumper_color": "#2C3244",
+  "center_color": "#232838"
+}

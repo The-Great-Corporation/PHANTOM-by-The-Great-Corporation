@@ -7,6 +7,9 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Build
 import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,9 +18,13 @@ import com.manette.config.LayoutConfig
 import com.manette.config.ProfileManager
 import com.manette.data.ControllerProfile
 import com.manette.hid.BluetoothHidService
+import com.manette.hid.HidCapability
+import com.manette.hid.HidState
+import com.manette.hid.HidStatus
 import com.manette.network.ConnectionManager
 import com.manette.network.ConnectionState
 import com.manette.network.UdpClient
+import com.manette.sensors.GyroscopeHandler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +39,39 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private val profileManager = ProfileManager(application)
     val connectionManager = ConnectionManager(application)
+
+    /** Gyroscope : données envoyées vers le serveur en mode The Great. */
+    private val gyroscopeHandler = GyroscopeHandler(application).also { it.initialize() }
+
+    init {
+        // Câbler le callback vibration : serveur PC → téléphone vibre
+        connectionManager.onVibrationReceived = { left, right, durationSec ->
+            triggerDeviceVibration(left, right, durationSec)
+        }
+    }
+
+    /**
+     * Déclenche une vibration native sur le téléphone selon les paramètres reçus du serveur PC.
+     * left/right : 0.0–1.0 ; durationSec : durée en secondes.
+     */
+    private fun triggerDeviceVibration(left: Float, right: Float, durationSec: Float) {
+        val ctx = getApplication<Application>()
+        val vibrator: Vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+        if (!vibrator.hasVibrator()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val amplitude = ((left + right) / 2f * 255f).toInt().coerceIn(1, 255)
+            val durationMs = (durationSec * 1000f).toLong().coerceIn(10L, 3000L)
+            val amp = if (vibrator.hasAmplitudeControl()) amplitude
+                      else VibrationEffect.DEFAULT_AMPLITUDE
+            vibrator.vibrate(VibrationEffect.createOneShot(durationMs, amp))
+        }
+        Log.d("GameViewModel", "Rumble received: L=$left R=$right dur=${durationSec}s")
+    }
 
     // ── Mode et état de connexion ────────────────────────────────────────────
     private val _operationMode = MutableStateFlow(OperationMode.THE_GREAT)
@@ -52,6 +92,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     val isAutoDiscovered: StateFlow<Boolean> = _isAutoDiscovered.asStateFlow()
 
     // ── PLUG & PLAY — Bluetooth HID ──────────────────────────────────────────
+    private val _hidCapability = MutableStateFlow(BluetoothHidService.checkCapabilities(application))
+    val hidCapability: StateFlow<HidCapability> = _hidCapability.asStateFlow()
+
+    private val _hidState = MutableStateFlow(HidState())
+    val hidState: StateFlow<HidState> = _hidState.asStateFlow()
+
     private val _hidConnected = MutableStateFlow(false)
     val hidConnected: StateFlow<Boolean> = _hidConnected.asStateFlow()
 
@@ -60,6 +106,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private var hidService: BluetoothHidService? = null
     private var hidServiceBound = false
+
+    fun refreshHidCapabilities() {
+        _hidCapability.value = BluetoothHidService.checkCapabilities(getApplication())
+    }
 
     private val hidServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -108,6 +158,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _customLayout = MutableStateFlow<Map<String, ButtonPosition>>(emptyMap())
     val customLayout: StateFlow<Map<String, ButtonPosition>> = _customLayout.asStateFlow()
 
+    // ── Multi-profils ────────────────────────────────────────────────────────
+    private val _activeProfileFilename = MutableStateFlow("default_profile.json")
+    val activeProfileFilename: StateFlow<String> = _activeProfileFilename.asStateFlow()
+
+    private val _profilesList = MutableStateFlow<List<String>>(emptyList())
+    val profilesList: StateFlow<List<String>> = _profilesList.asStateFlow()
+
     // ── Cache d'entrées temps réel ────────────────────────────────────────────
     private val inputState = mutableMapOf<String, Any>(
         "a" to false, "b" to false, "x" to false, "y" to false,
@@ -124,16 +181,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             val defaultProf = profileManager.createDefaultProfileIfNotExists()
-            _currentProfile.value = defaultProf
-            _backgroundUri.value = defaultProf.layoutConfig.backgroundPath
-            _backgroundDim.value = defaultProf.layoutConfig.backgroundDim
-            _backgroundScale.value = defaultProf.layoutConfig.backgroundScale
-            _backgroundOffsetX.value = defaultProf.layoutConfig.backgroundOffsetX
-            _backgroundOffsetY.value = defaultProf.layoutConfig.backgroundOffsetY
-            _skin.value = defaultProf.layoutConfig.skin.ifEmpty { "xbox" }
-            _sensitivity.value = defaultProf.sensitivitySettings.overall
-            _deadzone.value = defaultProf.deadzoneSettings.leftStick
-            _customLayout.value = defaultProf.layoutConfig.buttonPositions
+            applyProfile(defaultProf, "default_profile.json")
+            refreshProfilesList()
 
             // Détection automatique zéro-friction (mode THE GREAT uniquement)
             scanForTgcServer()
@@ -160,6 +209,33 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Démarrage du service HID (PLUG & PLAY) ────────────────────────────────
     fun startHidService() {
+        refreshHidCapabilities()
+        val cap = _hidCapability.value
+        if (!cap.isSupportedOs) {
+            _hidState.value = HidState(
+                enabled = false,
+                status = HidStatus.UNSUPPORTED_OS,
+                errorMessage = "Android 9.0+ (API 28) est requis pour le mode Plug & Play."
+            )
+            return
+        }
+        if (!cap.hasBluetoothHardware) {
+            _hidState.value = HidState(
+                enabled = false,
+                status = HidStatus.NO_BLUETOOTH_HARDWARE,
+                errorMessage = "Aucune puce Bluetooth sur cet appareil."
+            )
+            return
+        }
+        if (!cap.isBluetoothEnabled) {
+            _hidState.value = HidState(
+                enabled = false,
+                status = HidStatus.BLUETOOTH_DISABLED,
+                errorMessage = "Veuillez activer le Bluetooth dans les paramètres."
+            )
+            return
+        }
+
         val ctx = getApplication<Application>()
         val intent = Intent(ctx, BluetoothHidService::class.java)
         try {
@@ -174,6 +250,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 while (_operationMode.value == OperationMode.PLUG_AND_PLAY) {
                     val s = BluetoothHidService.instance?._hidState?.value
                     if (s != null) {
+                        _hidState.value = s
                         _hidConnected.value = s.connected
                         _hidDeviceName.value = s.deviceName
                     }
@@ -182,6 +259,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         } catch (e: Exception) {
             Log.e("GameViewModel", "Error starting HID service: ${e.message}")
+            _hidState.value = HidState(
+                enabled = false,
+                status = HidStatus.REGISTRATION_FAILED,
+                errorMessage = "Erreur lancement service HID : ${e.message}"
+            )
         }
     }
 
@@ -231,6 +313,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        // Émettre l'état neutre avant la déconnexion (A5 : aucune touche collée)
+        releaseAllInputs()
+        gyroscopeHandler.stop()
         viewModelScope.launch { connectionManager.disconnect() }
         if (_operationMode.value == OperationMode.PLUG_AND_PLAY) stopHidService()
     }
@@ -308,17 +393,44 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun emitInput() {
         when (_operationMode.value) {
             OperationMode.THE_GREAT -> {
-                // Envoi UDP vers le serveur PC
+                // Inclure les données gyroscope si disponibles
+                val gyroData = gyroscopeHandler.gyroData.value
+                val payload = inputState.toMutableMap().apply {
+                    if (gyroscopeHandler.enabled.value) {
+                        put("gyro_x", gyroData.x)
+                        put("gyro_y", gyroData.y)
+                        put("gyro_z", gyroData.z)
+                    }
+                }
                 viewModelScope.launch {
-                    val sent = connectionManager.sendInput(inputState)
+                    val sent = connectionManager.sendInput(payload)
                     Log.d("GameViewModel", "UDP input dispatched: sent=$sent")
                 }
             }
             OperationMode.PLUG_AND_PLAY -> {
-                // Envoi HID Bluetooth natif — construction du rapport HID
                 sendHidReport()
             }
         }
+    }
+
+    /**
+     * Remet tous les inputs à l'état neutre et l'émet vers le serveur / HID.
+     * Appelé sur pause, écran éteint, annulation tactile ou perte de connexion (A5).
+     */
+    fun releaseAllInputs() {
+        val booleanKeys = listOf(
+            "a", "b", "x", "y", "left_bumper", "right_bumper",
+            "back", "start", "left_thumb", "right_thumb",
+            "dpad_up", "dpad_down", "dpad_left", "dpad_right"
+        )
+        val floatKeys = listOf(
+            "left_stick_x", "left_stick_y", "right_stick_x", "right_stick_y",
+            "left_trigger", "right_trigger"
+        )
+        booleanKeys.forEach { inputState[it] = false }
+        floatKeys.forEach { inputState[it] = 0.0f }
+        emitInput()
+        Log.d("GameViewModel", "All inputs released — neutral state emitted")
     }
 
     /**
@@ -367,13 +479,133 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Gestion Multi-Profils & Persistance ─────────────────────────────────
+    fun refreshProfilesList() {
+        viewModelScope.launch {
+            _profilesList.value = profileManager.listProfiles()
+        }
+    }
+
+    private fun applyProfile(profile: ControllerProfile, filename: String) {
+        _currentProfile.value = profile
+        _activeProfileFilename.value = filename
+        _backgroundUri.value = profile.layoutConfig.backgroundPath
+        _backgroundDim.value = profile.layoutConfig.backgroundDim
+        _backgroundScale.value = profile.layoutConfig.backgroundScale
+        _backgroundOffsetX.value = profile.layoutConfig.backgroundOffsetX
+        _backgroundOffsetY.value = profile.layoutConfig.backgroundOffsetY
+        _skin.value = profile.layoutConfig.skin.ifEmpty { "xbox" }
+        _sensitivity.value = profile.sensitivitySettings.overall
+        _deadzone.value = profile.deadzoneSettings.leftStick
+        _customLayout.value = profile.layoutConfig.buttonPositions
+    }
+
+    fun switchProfile(filename: String) {
+        viewModelScope.launch {
+            val prof = profileManager.loadProfile(filename)
+            if (prof != null) {
+                applyProfile(prof, filename)
+            }
+        }
+    }
+
+    fun createNewProfile(name: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val cleanName = name.trim().ifEmpty { "Nouveau Profil" }
+            val sanitized = cleanName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val filename = "${sanitized}_${System.currentTimeMillis() % 10000}.json"
+            val base = _currentProfile.value ?: profileManager.createDefaultProfileIfNotExists()
+            val newProf = base.copy(
+                name = cleanName,
+                createdAt = System.currentTimeMillis(),
+                updatedAt = System.currentTimeMillis()
+            )
+            val success = profileManager.saveProfile(newProf, filename)
+            if (success) {
+                applyProfile(newProf, filename)
+                refreshProfilesList()
+            }
+            onComplete?.invoke(success)
+        }
+    }
+
+    fun duplicateCurrentProfile(newName: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val cleanName = newName.trim().ifEmpty { "${_currentProfile.value?.name ?: "Profil"} (Copie)" }
+            val sanitized = cleanName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val filename = "${sanitized}_${System.currentTimeMillis() % 10000}.json"
+            val success = profileManager.duplicateProfile(_activeProfileFilename.value, cleanName, filename)
+            if (success) {
+                switchProfile(filename)
+                refreshProfilesList()
+            }
+            onComplete?.invoke(success)
+        }
+    }
+
+    fun renameCurrentProfile(newName: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val cleanName = newName.trim()
+            if (cleanName.isEmpty()) {
+                onComplete?.invoke(false)
+                return@launch
+            }
+            val filename = _activeProfileFilename.value
+            val success = profileManager.renameProfile(filename, cleanName)
+            if (success) {
+                val current = _currentProfile.value
+                if (current != null) {
+                    _currentProfile.value = current.copy(name = cleanName, updatedAt = System.currentTimeMillis())
+                }
+                refreshProfilesList()
+            }
+            onComplete?.invoke(success)
+        }
+    }
+
+    fun deleteCurrentProfile(onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val current = _activeProfileFilename.value
+            if (current == "default_profile.json") {
+                onComplete?.invoke(false)
+                return@launch
+            }
+            val success = profileManager.deleteProfile(current)
+            if (success) {
+                switchProfile("default_profile.json")
+                refreshProfilesList()
+            }
+            onComplete?.invoke(success)
+        }
+    }
+
+    suspend fun exportActiveProfileToStream(outputStream: java.io.OutputStream): Boolean {
+        val cur = _currentProfile.value ?: return false
+        return profileManager.exportProfileToStream(cur, outputStream)
+    }
+
+    suspend fun importProfileFromStream(inputStream: java.io.InputStream, suggestedFilename: String): Boolean {
+        val imported = profileManager.importProfileFromStream(inputStream) ?: return false
+        val filename = if (suggestedFilename.endsWith(".json") || suggestedFilename.endsWith(".phantom")) {
+            suggestedFilename
+        } else {
+            "${suggestedFilename}.json"
+        }
+        val saved = profileManager.saveProfile(imported, filename)
+        if (saved) {
+            applyProfile(imported, filename)
+            refreshProfilesList()
+        }
+        return saved
+    }
+
     // ── Position des boutons (layout éditeur) ─────────────────────────────────
     fun updateAllButtonPositions(positions: Map<String, ButtonPosition>) {
         _customLayout.value = positions
         val cur = _currentProfile.value ?: return
         val updated = cur.copy(layoutConfig = cur.layoutConfig.copy(buttonPositions = positions))
         _currentProfile.value = updated
-        viewModelScope.launch { profileManager.saveDefaultProfile(updated) }
+        viewModelScope.launch { profileManager.saveProfile(updated, _activeProfileFilename.value) }
     }
 
     fun resetCustomLayout() {
@@ -381,7 +613,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val cur = _currentProfile.value ?: return
         val updated = cur.copy(layoutConfig = cur.layoutConfig.copy(buttonPositions = emptyMap()))
         _currentProfile.value = updated
-        viewModelScope.launch { profileManager.saveDefaultProfile(updated) }
+        viewModelScope.launch { profileManager.saveProfile(updated, _activeProfileFilename.value) }
     }
 
     fun updateButtonPosition(buttonId: String, x: Float, y: Float) {
@@ -392,7 +624,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val updated = cur.copy(layoutConfig = cur.layoutConfig.copy(buttonPositions = currentPositions))
         _currentProfile.value = updated
         _customLayout.value = currentPositions
-        viewModelScope.launch { profileManager.saveDefaultProfile(updated) }
+        viewModelScope.launch { profileManager.saveProfile(updated, _activeProfileFilename.value) }
     }
 
     private fun saveCurrentSettings() {
@@ -410,11 +642,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             deadzoneSettings = cur.deadzoneSettings.copy(leftStick = _deadzone.value)
         )
         _currentProfile.value = updated
-        viewModelScope.launch { profileManager.saveDefaultProfile(updated) }
+        viewModelScope.launch { profileManager.saveProfile(updated, _activeProfileFilename.value) }
     }
 
     override fun onCleared() {
         super.onCleared()
+        gyroscopeHandler.stop()
         if (hidServiceBound) {
             try { getApplication<Application>().unbindService(hidServiceConnection) } catch (_: Exception) {}
         }
