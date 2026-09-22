@@ -7,6 +7,8 @@ import logging
 import json
 from websockets.server import serve
 from typing import Dict, Set
+from core.session_security import SessionSecurity, SessionSecurityError
+from core.stream_security import StreamAuthenticator
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 class WebSocketServer:
     """WebSocket server for reliable gamepad input."""
     
-    def __init__(self, host: str, port: int, connection_manager, gamepad_emulator, haptic_feedback):
+    def __init__(self, host: str, port: int, connection_manager, gamepad_emulator, haptic_feedback, security=None):
         self.host = host
         self.port = port
         self.connection_manager = connection_manager
@@ -24,6 +26,7 @@ class WebSocketServer:
         self._running = False
         self._server = None
         self.max_message_size = 8 * 1024
+        self.authenticator = StreamAuthenticator(security or SessionSecurity())
         
         if hasattr(self.haptic_feedback, 'register_sender'):
             self.haptic_feedback.register_sender(self._send_vibration_to_client)
@@ -72,6 +75,9 @@ class WebSocketServer:
     async def _handle_client(self, websocket, path=None):
         """Handle a WebSocket client connection."""
         client_id = None
+        authenticated = False
+        address = websocket.remote_address
+        session = None
         
         try:
             logger.info(f"New WebSocket connection from {websocket.remote_address}")
@@ -81,44 +87,56 @@ class WebSocketServer:
                     data = json.loads(message)
                     msg_type = data.get('type')
                     
-                    if msg_type == 'connect':
-                        client_id = data.get('client_id')
-                        if client_id:
-                            accepted = await self.connection_manager.connect_client(
-                                client_id,
-                                'websocket',
-                                str(websocket.remote_address)
-                            )
-                            if not accepted:
-                                client_id = None
-                                await websocket.close(code=1008, reason='Maximum clients reached')
-                                return
-                            self.clients[client_id] = websocket
-                            
-                            # Send connection confirmation
-                            await websocket.send(json.dumps({
-                                'type': 'connected',
-                                'client_id': client_id
-                            }))
-                    
-                    elif msg_type == 'input':
+                    if msg_type == 'connect' and not authenticated:
+                        client_id = data.get('device_id') or data.get('client_id')
+                        await websocket.send(json.dumps(
+                            self.authenticator.begin(data, address)
+                        ))
+                    elif msg_type == 'pair_proof' and not authenticated:
+                        session = self.authenticator.complete(data, address)
+                        client_id = session.identity.device_id
+                        accepted = await self.connection_manager.connect_client(
+                            client_id, 'websocket', str(address)
+                        )
+                        if not accepted:
+                            await websocket.close(code=1008, reason='Maximum clients reached')
+                            return
+                        authenticated = True
+                        self.clients[client_id] = websocket
+                        await websocket.send(json.dumps({
+                            'type': 'connected', 'client_id': client_id,
+                            'session_id': session.identity.session_id,
+                            'server_challenge': data.get('challenge'),
+                        }))
+                    elif msg_type == 'input' and authenticated:
                         if client_id and self.clients.get(client_id) is websocket:
-                            await self._handle_input(client_id, data.get('data', {}))
+                            await self._handle_input(
+                                client_id, self.authenticator.verify_message(session, data)
+                            )
                     
-                    elif msg_type == 'heartbeat':
+                    elif msg_type == 'heartbeat' and authenticated:
                         if client_id:
+                            self.authenticator.verify_message(session, data)
                             await self.connection_manager.update_activity(client_id)
                     
-                    elif msg_type == 'ping':
+                    elif msg_type == 'ping' and authenticated:
                         if client_id:
+                            self.authenticator.verify_message(session, data)
                             await websocket.send(json.dumps({
                                 'type': 'pong',
                                 'client_id': client_id,
                                 'timestamp': asyncio.get_event_loop().time()
                             }))
+                    elif msg_type in ('input', 'heartbeat', 'ping'):
+                        await websocket.close(code=1008, reason='Authentication required')
+                        return
                             
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received: {e}")
+                except (SessionSecurityError, ValueError, TypeError) as e:
+                    logger.warning("Rejected WebSocket authentication: %s", e)
+                    await websocket.close(code=1008, reason='Authentication failed')
+                    return
                 except Exception as e:
                     logger.error(f"Error handling message: {e}")
                     

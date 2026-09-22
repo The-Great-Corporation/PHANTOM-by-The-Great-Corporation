@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VibrationCommand:
-    """Represents a vibration command."""
+    """Output-only haptic command, separate from :class:`GamepadState`.
+
+    Motor intensities are normalized to ``0.0..1.0`` and duration is in
+    seconds. Values are clamped by ``trigger_vibration`` before dispatch.
+    """
     client_id: str
     left_motor: float  # 0.0 to 1.0
     right_motor: float  # 0.0 to 1.0

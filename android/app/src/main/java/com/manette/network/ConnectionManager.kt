@@ -25,7 +25,10 @@ class ConnectionManager(private val context: Context) {
     suspend fun connect(
         connectionType: String,
         serverIp: String,
-        port: Int
+        port: Int,
+        deviceId: String? = null,
+        tokenId: String? = null,
+        tokenSecret: String? = null
     ): Boolean {
         disconnect()
 
@@ -33,12 +36,15 @@ class ConnectionManager(private val context: Context) {
             "udp" -> UdpClient(
                 serverIp = serverIp,
                 port = port,
+                deviceId = deviceId,
+                tokenId = tokenId,
+                tokenSecret = tokenSecret,
                 onLatencyUpdated = { lat -> updateLatency(lat) },
                 onVibrationReceived = onVibrationReceived
             )
-            "websocket" -> WebSocketClient(serverIp, port)
-            "bluetooth" -> BluetoothClient(port)
-            "usb" -> UsbClient(port)
+            "websocket" -> WebSocketClient(serverIp, port, deviceId, tokenId, tokenSecret)
+            "bluetooth" -> BluetoothClient(port, deviceId, tokenId, tokenSecret)
+            "usb" -> UsbClient(port, deviceId, tokenId, tokenSecret)
             else -> return false
         }
 
@@ -82,4 +88,3 @@ class ConnectionManager(private val context: Context) {
         return _connectionState.value.connected
     }
 }
-

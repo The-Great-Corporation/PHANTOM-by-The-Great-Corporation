@@ -31,14 +31,14 @@ object LayoutValidator {
         "btn_rt"       to 54f,
         "btn_lb"       to 54f,
         "btn_rb"       to 54f,
-        "btn_back"     to 46f,
-        "btn_start"    to 46f,
+        "btn_back"     to 48f,
+        "btn_start"    to 48f,
         "dpad"         to 42f,   // zone individuelle d'une direction du D-Pad
         "abxy"         to 46f,   // zone individuelle A/B/X/Y
-        "btn_a"        to 46f,
-        "btn_b"        to 46f,
-        "btn_x"        to 46f,
-        "btn_y"        to 46f,
+        "btn_a"        to 48f,
+        "btn_b"        to 48f,
+        "btn_x"        to 48f,
+        "btn_y"        to 48f,
         "left_stick"   to 140f,
         "right_stick"  to 140f
     )

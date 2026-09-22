@@ -17,6 +17,19 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import collections
 import pathlib
+try:
+    import qrcode
+    from PIL import ImageTk
+except ImportError:
+    qrcode = None
+    ImageTk = None
+
+# Make the repository root and server directory importable when this file is
+# launched directly, including through the Windows launcher batch file.
+SERVER_DIR = pathlib.Path(__file__).resolve().parent
+PROJECT_ROOT = SERVER_DIR.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(SERVER_DIR))
 
 # Load configuration and translations
 from config_loader import load_config
@@ -37,14 +50,9 @@ from ui.toast import Toast
 import collections
 import pathlib
 
-
-
-
-# Ensure current dir is in sys.path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from main import VirtualGamepadServer
 from core.gamepad_emulator import GamepadState
+from core.pairing_payload import generate_pairing_payload
 
 # Colors - TGC Dark Theme
 BG_COLOR = "#0A0C11"
@@ -115,6 +123,9 @@ class PhantomServerApp:
         self.server_loop = None
         self.is_running = False
         self.local_ip = get_local_ip()
+        self.pairing_image = None
+        self.pairing_payload = None
+        self.pairing_expiry_job = None
 
         self.last_state = GamepadState()
 
@@ -125,6 +136,32 @@ class PhantomServerApp:
 
         # Periodic UI update for controller visualizer
         self.root.after(33, self._update_visualizer_loop)
+
+    def _build_pairing_card(self, parent):
+        card = tk.LabelFrame(
+            parent, text=" Appairage Android sécurisé ", bg=CARD_BG,
+            fg=ACCENT_PRIMARY, font=("Segoe UI", 11, "bold"),
+            padx=12, pady=12, bd=1, relief="solid"
+        )
+        card.pack(fill=tk.X, pady=(0, 15))
+        self.pairing_qr_label = tk.Label(card, text="Démarrez le serveur pour générer le QR Code.",
+                                         bg=CARD_BG, fg=TEXT_SECONDARY)
+        self.pairing_qr_label.pack(side=tk.LEFT, padx=(0, 12))
+        details = tk.Frame(card, bg=CARD_BG)
+        details.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tk.Label(details, text="Scannez ce QR Code depuis l'application Android.",
+                 bg=CARD_BG, fg=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"),
+                 wraplength=300, justify=tk.LEFT).pack(anchor="w")
+        self.pairing_status_label = tk.Label(
+            details, text="QR inactif", bg=CARD_BG, fg=TEXT_SECONDARY,
+            justify=tk.LEFT, wraplength=300
+        )
+        self.pairing_status_label.pack(anchor="w", pady=(6, 8))
+        self.refresh_pairing_btn = tk.Button(
+            details, text="Renouveler le QR Code", command=self._refresh_pairing,
+            bg=ACCENT_PRIMARY, fg="#000000", bd=0, state=tk.DISABLED
+        )
+        self.refresh_pairing_btn.pack(anchor="w")
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -200,6 +237,8 @@ class PhantomServerApp:
         copy_btn = tk.Button(ip_box, text=Translations["copy_button"], font=("Segoe UI", 9, "bold"), bg=ACCENT_PRIMARY, fg="#000",
                              bd=0, activebackground=BTN_HOVER, padx=12, command=self._copy_ip, takefocus=True)
         copy_btn.pack(side=tk.LEFT, padx=(8, 0), ipady=6)
+
+        self._build_pairing_card(left_col)
 
         # Card 2: Server Ports & Services
         services_card = tk.LabelFrame(left_col, text=" Canaux de Diffusion ", bg=CARD_BG, fg=ACCENT_PRIMARY,
@@ -424,8 +463,11 @@ class PhantomServerApp:
             self._stop_server_thread()
 
     def _start_server_thread(self):
-        self.server = VirtualGamepadServer()
+        self.server = VirtualGamepadServer(
+            config_path=str(PROJECT_ROOT / "server" / "config" / "server_config.json")
+        )
         self.is_running = True
+        self._refresh_pairing()
 
         def run_loop():
             self.server_loop = asyncio.new_event_loop()
@@ -449,6 +491,58 @@ class PhantomServerApp:
             lbl.configure(text=f"[{port}] Actif ✔", fg=SUCCESS_COLOR)
 
         logging.info(Translations["server_started"])
+
+    def _refresh_pairing(self):
+        if not self.server or not self.is_running:
+            return
+        if qrcode is None or ImageTk is None:
+            self.pairing_qr_label.configure(
+                image="", text="Module QR manquant"
+            )
+            self.pairing_status_label.configure(
+                text="Installez les dépendances avec :\n"
+                     "python -m pip install -r server\\requirements.txt",
+                fg=ERROR_COLOR
+            )
+            return
+        try:
+            port = self.server.config["server"]["udp_port"]
+            result = generate_pairing_payload(
+                self.server.udp_security,
+                device_id="android-device",
+                server=self.local_ip,
+                port=port,
+                ttl_seconds=120,
+            )
+            qr = qrcode.make(result.payload)
+            qr = qr.resize((180, 180))
+            self.pairing_image = ImageTk.PhotoImage(qr)
+            self.pairing_qr_label.configure(image=self.pairing_image, text="")
+            self.pairing_payload = result.payload
+            self.pairing_status_label.configure(
+                text="QR valide 120 secondes.\nRenouvelez-le pour un nouvel appairage.",
+                fg=SUCCESS_COLOR
+            )
+            self.refresh_pairing_btn.configure(state=tk.NORMAL)
+            if self.pairing_expiry_job:
+                self.root.after_cancel(self.pairing_expiry_job)
+            self.pairing_expiry_job = self.root.after(120000, self._expire_pairing)
+        except Exception as error:
+            logging.error("Unable to generate pairing QR: %s", error)
+            self.pairing_qr_label.configure(image="", text="QR indisponible")
+            self.pairing_status_label.configure(
+                text="Impossible de générer le QR Code. Vérifiez les dépendances serveur.",
+                fg=ERROR_COLOR
+            )
+
+    def _expire_pairing(self):
+        self.pairing_payload = None
+        self.pairing_image = None
+        self.pairing_qr_label.configure(image="", text="QR expiré")
+        self.pairing_status_label.configure(
+            text="Le QR a expiré. Cliquez sur « Renouveler le QR Code ».",
+            fg=TEXT_SECONDARY
+        )
 
     def _stop_server_thread(self):
         if self.server and self.server_loop:

@@ -785,7 +785,21 @@ fun LayoutEditorScreen(
                                 }
                             },
                             confirmButton = {
-                                TextButton(onClick = { validationViolations = emptyList() }) {
+                                TextButton(
+                                    onClick = {
+                                        val correctedPositions = positions.toMutableMap()
+                                        validationViolations.forEach { violation ->
+                                            val key = violation.controlKey
+                                            val pos = correctedPositions[key]
+                                            if (pos != null) {
+                                                val minMult = LayoutValidator.minSizeMultiplier(key)
+                                                correctedPositions[key] = pos.copy(size = maxOf(pos.size, minMult))
+                                            }
+                                        }
+                                        positions = correctedPositions
+                                        validationViolations = emptyList()
+                                    }
+                                ) {
                                     Text("Corriger", color = GamepadPrimary, fontWeight = FontWeight.Bold)
                                 }
                             },

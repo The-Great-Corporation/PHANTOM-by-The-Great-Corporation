@@ -10,9 +10,9 @@ import logging
 from pathlib import Path
 from core.connection_manager import ConnectionManager
 from core.gamepad_emulator import GamepadEmulator
-from core.keyboard_mouse import KeyboardMouseHandler
 from core.haptic_feedback import HapticFeedbackManager
 from core.adb_bridge import ADBBridge
+from core.session_security import SessionSecurity
 from protocols.udp_server import UDPServer
 from protocols.websocket_server import WebSocketServer
 from protocols.bluetooth_server import BluetoothServer
@@ -31,9 +31,9 @@ class VirtualGamepadServer:
         self.config = self._load_config(config_path)
         self.connection_manager = ConnectionManager(self.config)
         self.gamepad_emulator = GamepadEmulator(self.config)
-        self.keyboard_mouse = KeyboardMouseHandler(self.config)
         self.haptic_feedback = HapticFeedbackManager(self.config)
         self.adb_bridge = ADBBridge(self.config)
+        self.session_security = SessionSecurity()
         
         self.servers = {}
         self.running = False
@@ -65,10 +65,6 @@ class VirtualGamepadServer:
                 "vibration_enabled": True,
                 "deadzone_left": 0.1,
                 "deadzone_right": 0.1
-            },
-            "keyboard_mouse": {
-                "enabled": True,
-                "sensitivity": 1.0
             },
             "connection": {
                 "max_clients": 4,
@@ -103,17 +99,14 @@ class VirtualGamepadServer:
 
         self.gamepad_emulator.register_vibration_listener(_on_gamepad_vibration)
         
-        # Initialize keyboard/mouse handler if enabled
-        if self.config.get('keyboard_mouse', {}).get('enabled', False):
-            await self.keyboard_mouse.initialize()
-        
         # Start protocol servers
         self.servers['udp'] = UDPServer(
             self.config['server']['host'],
             self.config['server']['udp_port'],
             self.connection_manager,
             self.gamepad_emulator,
-            self.haptic_feedback
+            self.haptic_feedback,
+            security=self.session_security,
         )
         
         self.servers['websocket'] = WebSocketServer(
@@ -121,14 +114,16 @@ class VirtualGamepadServer:
             self.config['server']['websocket_port'],
             self.connection_manager,
             self.gamepad_emulator,
-            self.haptic_feedback
+            self.haptic_feedback,
+            security=self.session_security,
         )
         
         self.servers['bluetooth'] = BluetoothServer(
             self.config['server']['bluetooth_port'],
             self.connection_manager,
             self.gamepad_emulator,
-            self.haptic_feedback
+            self.haptic_feedback,
+            security=self.session_security,
         )
         
         self.servers['usb'] = USBServer(
@@ -136,7 +131,8 @@ class VirtualGamepadServer:
             self.connection_manager,
             self.gamepad_emulator,
             self.haptic_feedback,
-            self.adb_bridge
+            self.adb_bridge,
+            security=self.session_security,
         )
         
         # Start all servers
@@ -158,7 +154,6 @@ class VirtualGamepadServer:
         
         await self.connection_manager.stop()
         await self.haptic_feedback.stop()
-        await self.keyboard_mouse.cleanup()
         await self.gamepad_emulator.cleanup()
         logger.info("Server stopped")
 

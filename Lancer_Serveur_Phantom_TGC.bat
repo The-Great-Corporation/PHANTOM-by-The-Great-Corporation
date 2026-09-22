@@ -1,5 +1,5 @@
-﻿@echo off
+@echo off
 title Phantom Server - The Great Corporation
-cd server
-python gui_app.py
+cd /d "%~dp0"
+python server\gui_app.py
 pause

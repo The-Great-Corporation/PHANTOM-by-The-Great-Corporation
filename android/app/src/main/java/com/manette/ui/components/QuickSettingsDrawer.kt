@@ -90,12 +90,23 @@ fun QuickSettingsDrawer(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                val isConnected = connectionType.lowercase() != "none" && connectionType.isNotBlank()
+                                val statusText = when {
+                                    latency > 0 -> "${latency} ms"
+                                    isConnected -> "Connecté"
+                                    else -> "Déconnecté"
+                                }
+                                val statusColor = when {
+                                    !isConnected -> Color(0xFFA0AAB8)
+                                    latency in 1..24 -> Color(0xFF00E676)
+                                    else -> Color(0xFFFFB800)
+                                }
                                 Text("Liaison : " + connectionType.uppercase(), fontSize = 12.sp, color = Color.White)
                                 Text(
-                                    text = if (latency > 0) latency.toString() + " ms" else "Connecté",
+                                    text = statusText,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (latency < 25) Color(0xFF00E676) else Color(0xFFFFB800)
+                                    color = statusColor
                                 )
                             }
                         }

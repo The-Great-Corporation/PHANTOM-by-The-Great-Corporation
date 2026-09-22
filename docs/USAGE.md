@@ -44,7 +44,6 @@ This mode connects to the Python server on your PC for advanced features.
 **Features:**
 - Multi-connection support (Wi-Fi, Bluetooth, USB)
 - Xbox 360/DualShock 4 emulation
-- Keyboard/mouse hybrid mode
 - Haptic feedback
 - Zero-latency USB via ADB
 
@@ -52,7 +51,6 @@ This mode connects to the Python server on your PC for advanced features.
 - Playing PC games
 - Need advanced features
 - Want lowest latency
-- Using keyboard/mouse hybrid mode
 
 ### "Plug & Play" Mode
 
@@ -99,6 +97,12 @@ Access via: **Configuration → Connection Settings**
 - **UDP** - Lowest latency, recommended for Wi-Fi
 - **WebSocket** - More reliable, fallback option
 - **Bluetooth** - For Bluetooth connections
+
+UDP pairing is authenticated and requires the caller to inject `device_id`,
+`token_id`, and `token_secret`. Missing credentials fail closed; discovery
+alone does not authorize input. Credentials are not stored or logged. QR-code
+provisioning and Android Keystore support are planned, so use a protected
+in-memory provisioning flow until they are available.
 - **USB** - Zero latency via ADB
 
 ### Sensitivity Settings
@@ -273,28 +277,6 @@ The app automatically creates a default profile on first launch with standard Xb
 ---
 
 ## Advanced Features
-
-### Keyboard/Mouse Hybrid Mode
-
-When enabled in the server, the controller can emulate keyboard and mouse input.
-
-**Use cases:**
-- Games without controller support
-- Desktop applications
-- Web browsing
-
-**Configuration:**
-- Enable in server config: `keyboard_mouse.enabled = true`
-- Map buttons to keys in server settings
-- Adjust sensitivity
-
-**Default mappings:**
-- A → Z key
-- B → X key
-- Start → Enter
-- Back → Escape
-- D-Pad → Arrow keys
-- Left Stick → Mouse movement
 
 ### Haptic Feedback
 

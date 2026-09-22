@@ -1,6 +1,7 @@
 package com.manette.ui.screens
 
 import android.net.Uri
+import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,6 +46,7 @@ import com.manette.ui.components.TGCWatermarkBadge
 import com.manette.ui.components.getSkinTheme
 import com.manette.ui.theme.*
 import com.manette.viewmodel.GameViewModel
+import com.google.zxing.integration.android.IntentIntegrator
 
 @Composable
 fun ConfigStudioScreen(
@@ -65,6 +67,9 @@ fun ConfigStudioScreen(
     val sensitivity by viewModel.sensitivity.collectAsState()
     val deadzone by viewModel.deadzone.collectAsState()
     val isAutoDiscovered by viewModel.isAutoDiscovered.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
+    val pairingRequired by viewModel.pairingRequired.collectAsState()
+    val pairingMessage by viewModel.pairingMessage.collectAsState()
 
     var advancedExpanded by remember { mutableStateOf(false) }
     var pendingBgUri by remember { mutableStateOf<String?>(null) }
@@ -78,6 +83,21 @@ fun ConfigStudioScreen(
     var pendingSkin by remember { mutableStateOf(skin) }
 
     val context = LocalContext.current
+    val qrScanner = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val scanResult = IntentIntegrator.parseActivityResult(result.resultCode, result.data)
+        val payload = scanResult?.contents
+        if (payload.isNullOrBlank()) {
+            Toast.makeText(context, "QR Code vide ou invalide.", Toast.LENGTH_SHORT).show()
+        } else {
+            val error = viewModel.savePairingPayload(payload)
+            if (error != null) {
+                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     // Sélecteur d'image avec permission persistante et aperçu/ajustement interactif préalable
     val imagePicker = rememberLauncherForActivityResult(
@@ -232,13 +252,14 @@ fun ConfigStudioScreen(
                                 Text("⚡", fontSize = 20.sp)
                                 Column {
                                     Text(
-                                        "Serveur détecté automatiquement",
+                                        if (connectionState.connected) "Connexion UDP établie" else "Serveur détecté automatiquement",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF00E676)
                                     )
                                     Text(
-                                        "IP : ${serverIp} — Connexion établie",
+                                        if (connectionState.connected) "IP : ${serverIp} — handshake confirmé"
+                                        else "IP : ${serverIp} — appairage en cours ou requis",
                                         fontSize = 11.sp,
                                         color = Color(0xFF00E676).copy(alpha = 0.8f)
                                     )
@@ -378,6 +399,71 @@ fun ConfigStudioScreen(
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            // ── Appairage temporaire ──
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = GamepadSurface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                var pairingText by remember { mutableStateOf("") }
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("🔐 APPAIRAGE DU SERVEUR", fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold, color = GamepadPrimary)
+                    Text(
+                        if (pairingRequired) "Scannez le QR affiché par le serveur, ou utilisez la saisie manuelle ci-dessous."
+                        else "Credentials enregistrés dans le stockage sécurisé Android Keystore.",
+                        fontSize = 11.sp, color = Color.White.copy(alpha = 0.75f)
+                    )
+                    OutlinedTextField(
+                        value = pairingText,
+                        onValueChange = { pairingText = it },
+                        label = { Text("Payload JSON temporaire") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = GamepadPrimary, unfocusedBorderColor = Color.Gray
+                        )
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                val activity = context as? Activity
+                                if (activity == null) {
+                                    Toast.makeText(context, "Scanner indisponible.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val intent = IntentIntegrator(activity)
+                                        .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                                        .setPrompt("Scannez le QR PHANTOM affiché par le serveur")
+                                        .setBeepEnabled(false)
+                                        .createScanIntent()
+                                    qrScanner.launch(intent)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = GamepadPrimary)
+                        ) { Text("Scanner le QR", color = Color.Black) }
+                        Button(
+                            onClick = {
+                                val error = viewModel.savePairingPayload(pairingText)
+                                if (error == null) pairingText = ""
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = GamepadPrimary)
+                        ) { Text("Enregistrer", color = Color.Black) }
+                    }
+                    OutlinedButton(
+                        onClick = { viewModel.clearPairing() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Révoquer", color = Color.White) }
+                    pairingMessage?.let {
+                        Text(it, fontSize = 11.sp, color = if (pairingRequired) Color(0xFFFFB74D) else Color.White)
                     }
                 }
             }
@@ -701,7 +787,7 @@ fun SkinPreviewDialog(
         title = {
             Column {
                 Text(
-                    skinMeta?.displayName ?: skinId.replaceFirstChar { it.uppercase() },
+                    skinMeta?.displayName ?: skinId.replaceFirstChar { it.uppercaseChar() },
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = GamepadPrimary

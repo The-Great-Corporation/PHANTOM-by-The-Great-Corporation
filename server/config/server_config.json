@@ -12,10 +12,6 @@
     "deadzone_left": 0.1,
     "deadzone_right": 0.1
   },
-  "keyboard_mouse": {
-    "enabled": true,
-    "sensitivity": 1.0
-  },
   "connection": {
     "max_clients": 4,
     "reconnect_interval": 5,

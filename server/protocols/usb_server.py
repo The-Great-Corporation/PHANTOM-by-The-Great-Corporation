@@ -6,6 +6,8 @@ import asyncio
 import logging
 import json
 from typing import Optional
+from core.session_security import SessionSecurity, SessionSecurityError
+from core.stream_security import StreamAuthenticator
 
 logger = logging.getLogger(__name__)
 MAX_MESSAGE_SIZE = 8 * 1024
@@ -14,7 +16,7 @@ MAX_MESSAGE_SIZE = 8 * 1024
 class USBServer:
     """USB server via ADB bridge for zero-latency connection."""
     
-    def __init__(self, port: int, connection_manager, gamepad_emulator, haptic_feedback, adb_bridge):
+    def __init__(self, port: int, connection_manager, gamepad_emulator, haptic_feedback, adb_bridge, security=None):
         self.port = port
         self.connection_manager = connection_manager
         self.gamepad_emulator = gamepad_emulator
@@ -23,6 +25,9 @@ class USBServer:
         self.server: Optional[asyncio.Server] = None
         self._running = False
         self._client_sockets = {}  # client_id -> (reader, writer)
+        self.authenticator = StreamAuthenticator(security or SessionSecurity())
+        self._pending_auth = set()
+        self._sessions = {}
         
     async def start(self):
         """Start the USB server."""
@@ -121,6 +126,7 @@ class USBServer:
                 await self.connection_manager.disconnect_client(client_id)
                 if client_id in self._client_sockets:
                     del self._client_sockets[client_id]
+                self._sessions.pop(writer, None)
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -133,13 +139,24 @@ class USBServer:
         try:
             data = json.loads(message)
             msg_type = data.get('type')
-            client_id = data.get('client_id')
+            client_id = data.get('device_id') or data.get('client_id')
             
             if not client_id:
                 logger.warning("Received message without client_id")
                 return
             
             if msg_type == 'connect':
+                response = self.authenticator.begin(data, writer.get_extra_info('peername'))
+                self._pending_auth.add(writer)
+                writer.write((json.dumps(response) + '\n').encode('utf-8'))
+                await writer.drain()
+                return None
+            
+            if msg_type == 'pair_proof':
+                if writer not in self._pending_auth:
+                    raise SessionSecurityError("authentication handshake not started")
+                session = self.authenticator.complete(data, writer.get_extra_info('peername'))
+                client_id = session.identity.device_id
                 accepted = await self.connection_manager.connect_client(
                     client_id,
                     'usb',
@@ -148,27 +165,45 @@ class USBServer:
                 if not accepted:
                     return None
                 self._client_sockets[client_id] = (reader, writer)
+                self._sessions[writer] = session
                 
                 # Send connection confirmation
                 response = json.dumps({
                     'type': 'connected',
-                    'client_id': client_id
+                    'client_id': client_id,
+                    'session_id': session.identity.session_id,
+                    'server_challenge': data.get('challenge'),
                 })
                 writer.write((response + '\n').encode('utf-8'))
                 await writer.drain()
+                self._pending_auth.discard(writer)
                 return client_id
             
-            elif msg_type == 'input':
-                if self._client_sockets.get(client_id, (None, None))[1] is writer:
-                    await self._handle_input(client_id, data.get('data', {}))
-            
-            elif msg_type == 'heartbeat':
-                if self._client_sockets.get(client_id, (None, None))[1] is writer:
+            elif msg_type in {'input', 'heartbeat', 'ping'}:
+                if writer in self._pending_auth:
+                    raise SessionSecurityError("authentication required")
+                if self._client_sockets.get(client_id, (None, None))[1] is not writer:
+                    raise SessionSecurityError("authentication required")
+                session = self._sessions.get(writer)
+                if session is None:
+                    raise SessionSecurityError("authentication required")
+                if msg_type == 'input':
+                    await self._handle_input(
+                        client_id, self.authenticator.verify_message(session, data)
+                    )
+                elif msg_type == 'heartbeat':
+                    self.authenticator.verify_message(session, data)
                     await self.connection_manager.update_activity(client_id)
-            
-            elif msg_type == 'ping':
-                await self._send_pong(client_id, writer)
+                elif msg_type == 'ping':
+                    self.authenticator.verify_message(session, data)
+                    await self._send_pong(client_id, writer)
+            else:
+                raise SessionSecurityError("unsupported USB message type")
                 
+        except (SessionSecurityError, ValueError, TypeError) as e:
+            logger.warning("Rejected USB authentication: %s", e)
+            writer.close()
+            return None
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON received: {e}")
         except Exception as e:

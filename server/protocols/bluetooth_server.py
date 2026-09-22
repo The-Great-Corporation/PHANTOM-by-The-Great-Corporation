@@ -6,6 +6,8 @@ import asyncio
 import logging
 import json
 from typing import Optional
+from core.session_security import SessionSecurity, SessionSecurityError
+from core.stream_security import StreamAuthenticator
 
 try:
     import bluetooth
@@ -20,7 +22,7 @@ MAX_MESSAGE_SIZE = 8 * 1024
 class BluetoothServer:
     """Bluetooth RFCOMM server for gamepad input."""
     
-    def __init__(self, port: int, connection_manager, gamepad_emulator, haptic_feedback):
+    def __init__(self, port: int, connection_manager, gamepad_emulator, haptic_feedback, security=None):
         self.port = port
         self.connection_manager = connection_manager
         self.gamepad_emulator = gamepad_emulator
@@ -28,6 +30,9 @@ class BluetoothServer:
         self.server_socket: Optional[bluetooth.BluetoothSocket] = None
         self._running = False
         self._client_sockets = {}  # client_id -> socket
+        self.authenticator = StreamAuthenticator(security or SessionSecurity())
+        self._pending_auth = set()
+        self._sessions = {}
         
     async def start(self):
         """Start the Bluetooth server."""
@@ -97,17 +102,6 @@ class BluetoothServer:
         buffer = ""
         
         try:
-            accepted = await self.connection_manager.connect_client(
-                client_id,
-                'bluetooth',
-                str(address[0])
-            )
-            if not accepted:
-                client_socket.close()
-                return
-            
-            self._client_sockets[client_id] = client_socket
-            
             loop = asyncio.get_event_loop()
             
             while self._running:
@@ -125,7 +119,7 @@ class BluetoothServer:
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         if line.strip():
-                            await self._handle_message(client_id, line.strip())
+                            await self._handle_message(client_id, line.strip(), client_socket, address)
                             
                 except asyncio.CancelledError:
                     break
@@ -139,25 +133,67 @@ class BluetoothServer:
             await self.connection_manager.disconnect_client(client_id)
             if client_id in self._client_sockets:
                 del self._client_sockets[client_id]
+            self._sessions.pop(client_socket, None)
             try:
                 client_socket.close()
             except Exception:
                 pass
             logger.info(f"Bluetooth client {client_id} disconnected")
     
-    async def _handle_message(self, client_id: str, message: str):
+    async def _handle_message(self, client_id: str, message: str, client_socket=None, address=None):
         """Handle a message from Bluetooth client."""
         try:
             data = json.loads(message)
             msg_type = data.get('type')
+            session = self._sessions.get(client_socket)
+            if session is not None:
+                client_id = session.identity.device_id
             
-            if msg_type == 'input':
-                await self._handle_input(client_id, data.get('data', {}))
-            elif msg_type == 'heartbeat':
+            if msg_type == 'connect':
+                response = self.authenticator.begin(data, address)
+                self._pending_auth.add(client_socket)
+                client_socket.send((json.dumps(response) + '\n').encode('utf-8'))
+            elif msg_type == 'pair_proof':
+                if client_socket not in self._pending_auth:
+                    raise SessionSecurityError("authentication handshake not started")
+                session = self.authenticator.complete(data, address)
+                client_id = session.identity.device_id
+                accepted = await self.connection_manager.connect_client(
+                    client_id, 'bluetooth', str(address[0])
+                )
+                if not accepted:
+                    raise SessionSecurityError("maximum clients reached")
+                self._client_sockets[client_id] = client_socket
+                self._sessions[client_socket] = session
+                self._pending_auth.discard(client_socket)
+                client_socket.send((json.dumps({
+                    'type': 'connected', 'client_id': client_id,
+                    'session_id': session.identity.session_id,
+                    'server_challenge': data.get('challenge'),
+                }) + '\n').encode('utf-8'))
+            elif msg_type == 'input' and client_id in self._client_sockets:
+                if session is None:
+                    raise SessionSecurityError("authentication required")
+                await self._handle_input(
+                    client_id, self.authenticator.verify_message(session, data)
+                )
+            elif msg_type == 'heartbeat' and client_id in self._client_sockets:
+                if session is None:
+                    raise SessionSecurityError("authentication required")
+                self.authenticator.verify_message(session, data)
                 await self.connection_manager.update_activity(client_id)
-            elif msg_type == 'ping':
+            elif msg_type == 'ping' and client_id in self._client_sockets:
+                if session is None:
+                    raise SessionSecurityError("authentication required")
+                self.authenticator.verify_message(session, data)
                 await self._send_pong(client_id)
+            elif msg_type in ('input', 'heartbeat', 'ping'):
+                raise SessionSecurityError("authentication required")
                 
+        except (SessionSecurityError, ValueError, TypeError) as e:
+            logger.warning("Rejected Bluetooth authentication: %s", e)
+            if client_socket:
+                client_socket.close()
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON received: {e}")
         except Exception as e:

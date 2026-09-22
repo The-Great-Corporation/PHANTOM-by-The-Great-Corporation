@@ -162,7 +162,7 @@ fun ControllerView(
 
         // ── 3. TOUCHE BACK / SELECT ───────────────────────────────────────────
         effectivePositions["btn_back"]?.let { pos ->
-            val size = (46f * pos.size).dp
+            val size = (48f * pos.size).dp
             Box(
                 modifier = Modifier
                     .offset(
@@ -186,7 +186,7 @@ fun ControllerView(
 
         // ── 4. TOUCHE START ───────────────────────────────────────────────────
         effectivePositions["btn_start"]?.let { pos ->
-            val size = (46f * pos.size).dp
+            val size = (48f * pos.size).dp
             Box(
                 modifier = Modifier
                     .offset(

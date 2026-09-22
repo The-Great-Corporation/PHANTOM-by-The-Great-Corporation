@@ -74,9 +74,6 @@ The ViGEm Bus driver is required for gamepad emulation on Windows.
    This will install:
    - `vgamepad` - Xbox 360 gamepad emulation
    - `websockets` - WebSocket server
-   - `pyautogui` - Keyboard/mouse control
-   - `pybluez` - Bluetooth RFCOMM
-   - `asyncio-mqtt` - Async I/O
    - `pyserial` - Serial communication
 
 ### Step 4: Configure the Server
@@ -97,10 +94,6 @@ Edit `server/config/server_config.json` to customize settings:
     "vibration_enabled": true,
     "deadzone_left": 0.1,
     "deadzone_right": 0.1
-  },
-  "keyboard_mouse": {
-    "enabled": true,
-    "sensitivity": 1.0
   },
   "connection": {
     "max_clients": 4,
@@ -185,6 +178,15 @@ On first launch, grant the following permissions:
 3. **Configure the Android app**
    - Open the app
    - Select "The Great" mode
+
+### Authenticated UDP pairing
+
+UDP requires credentials supplied explicitly by the application:
+`device_id`, `token_id`, and `token_secret`. The server and Android UDP client
+are secure only when all three values come from a trusted provisioning flow.
+Do not put the secret in source control, logs, preferences, or other
+persistent storage. The Android app now accepts the versioned temporary JSON
+payload described below and stores it encrypted with Android Keystore.
    - Go to Configuration
    - Enter your PC's IP address
    - Select "UDP" as connection type
@@ -391,3 +393,19 @@ After successful installation:
    - Adjust settings as needed
 
 For more information, see [USAGE.md](USAGE.md) and [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+## Appairage Android UDP
+
+1. Démarrez le serveur PHANTOM et générez un payload d'appairage temporaire
+   depuis l'outil serveur prévu à cet effet (`server/core/pairing_payload.py`).
+   Il contient une expiration et un token à usage unique ; ne le copiez pas
+   dans les logs ou dans le dépôt.
+2. Dans **Studio de configuration > Appairage du serveur**, collez le JSON
+   temporaire puis choisissez **Enregistrer**. Le scanner caméra QR n'est pas
+   encore intégré ; cette saisie est le parcours transitoire documenté.
+3. Relancez la découverte ou **Connexion manuelle**. La reconnexion UDP utilise
+   automatiquement le credential chiffré dans Android Keystore et ne passe à
+   « connecté » qu'après `pair_ack`.
+4. Pour changer de serveur ou invalider le téléphone, choisissez **Révoquer**.
+   Le credential local est effacé et un nouvel appairage est requis.
+
+Les modes WebSocket, USB et Bluetooth ne sont pas concernés par ce parcours.
