@@ -33,8 +33,8 @@ class WebSocketClient(
     private val sequence = AtomicLong(0)
 
     override suspend fun connect(): Boolean = withContext(Dispatchers.IO) {
-        if (listOf(deviceId, tokenId, tokenSecret).any { it.isNullOrEmpty() }) {
-            Log.e("WebSocketClient", "WebSocket credentials (deviceId, tokenId, tokenSecret) are required")
+        if (deviceId.isNullOrEmpty() || tokenSecret.isNullOrEmpty()) {
+            Log.e("WebSocketClient", "WebSocket credentials (deviceId, tokenSecret) are required")
             return@withContext false
         }
         try {
@@ -50,13 +50,12 @@ class WebSocketClient(
             webSocketClient = object : WebSocketClient(uri) {
                 override fun onOpen(handshake: ServerHandshake?) {
                     connected = true
-                    Log.d("WebSocketClient", "Connected to server")
+                    Log.d("WebSocketClient", "Connected to server, sending reconnect_begin")
                     val clientIdentifier = deviceId ?: clientId
                     send(gson.toJson(mapOf(
-                        "type" to "connect",
+                        "type" to "reconnect_begin",
                         "client_id" to clientIdentifier,
                         "device_id" to clientIdentifier,
-                        "token_id" to tokenId,
                         "client_nonce" to connectMessageNonce
                     )))
                 }
@@ -66,6 +65,29 @@ class WebSocketClient(
                     Log.d("WebSocketClient", "Received: $payload")
                     val json = JsonParser.parseString(payload).asJsonObject
                     when (json.get("type")?.asString) {
+                        "reconnect_challenge" -> {
+                            if (tokenSecret.isNullOrEmpty() || deviceId.isNullOrEmpty()) {
+                                connectFailure = "Pairing credentials are required"
+                                close()
+                                return
+                            }
+                            val proof = UdpClient.computeReconnectProof(
+                                tokenSecret,
+                                deviceId,
+                                connectMessageNonce,
+                                json.get("challenge_id").asString,
+                                json.get("challenge").asString,
+                            )
+                            send(gson.toJson(mapOf(
+                                "type" to "reconnect_proof",
+                                "client_id" to (deviceId ?: clientId),
+                                "device_id" to (deviceId ?: clientId),
+                                "client_nonce" to connectMessageNonce,
+                                "challenge_id" to json.get("challenge_id").asString,
+                                "challenge" to json.get("challenge").asString,
+                                "proof" to proof
+                            )))
+                        }
                         "pair_challenge" -> {
                             if (tokenSecret.isNullOrEmpty() || tokenId.isNullOrEmpty() || deviceId.isNullOrEmpty()) {
                                 connectFailure = "Pairing credentials are required"
@@ -95,8 +117,7 @@ class WebSocketClient(
                             val sid = json.get("session_id")?.asString
                             val serverChallenge = json.get("server_challenge")?.asString
                             if (sid.isNullOrEmpty() || serverChallenge.isNullOrEmpty() ||
-                                tokenSecret.isNullOrEmpty() || tokenId.isNullOrEmpty() ||
-                                deviceId.isNullOrEmpty()) {
+                                tokenSecret.isNullOrEmpty() || deviceId.isNullOrEmpty()) {
                                 connectFailure = "Authenticated session material is missing"
                                 close()
                                 return

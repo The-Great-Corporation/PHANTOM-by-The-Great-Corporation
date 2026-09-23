@@ -14,6 +14,10 @@ data class PairingCredentials(
     fun isValid(nowEpochSeconds: Long = System.currentTimeMillis() / 1000L): Boolean =
         server.isNotBlank() && port in 1..65535 && deviceId.isNotBlank() &&
             tokenId.isNotBlank() && tokenSecret.isNotBlank() && expiresAtEpochSeconds > nowEpochSeconds
+
+    fun isUsableForReconnect(): Boolean =
+        server.isNotBlank() && port in 1..65535 && deviceId.isNotBlank() &&
+            tokenId.isNotBlank() && tokenSecret.isNotBlank()
 }
 
 data class PairingPayloadDocument(
@@ -32,7 +36,11 @@ object PairingPayloadParser {
     private const val VERSION = 1
     private val serverPattern = Regex("^[A-Za-z0-9.-]+$")
 
-    fun parse(raw: String, nowEpochSeconds: Long = System.currentTimeMillis() / 1000L): PairingCredentials {
+    fun parse(
+        raw: String,
+        nowEpochSeconds: Long = System.currentTimeMillis() / 1000L,
+        ignoreExpiry: Boolean = false
+    ): PairingCredentials {
         if (raw.length > 4096) throw IllegalArgumentException("Pairing payload is too large")
         val document = try {
             Gson().fromJson(raw.trim(), PairingPayloadDocument::class.java)
@@ -57,7 +65,12 @@ object PairingPayloadParser {
             throw IllegalArgumentException("Pairing credentials are incomplete")
         }
         val credentials = PairingCredentials(server, port, deviceId, tokenId, tokenSecret, expiresAt)
-        if (!credentials.isValid(nowEpochSeconds)) throw IllegalArgumentException("Pairing payload is expired")
+        if (!ignoreExpiry && !credentials.isValid(nowEpochSeconds)) {
+            throw IllegalArgumentException("Pairing payload is expired")
+        }
+        if (!credentials.isUsableForReconnect()) {
+            throw IllegalArgumentException("Pairing credentials are incomplete")
+        }
         return credentials
     }
 }

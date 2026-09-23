@@ -16,5 +16,9 @@
     "max_clients": 4,
     "reconnect_interval": 5,
     "timeout": 30
+  },
+  "security": {
+    "remembered_device_ttl_seconds": 2592000,
+    "reconnect_challenge_ttl_seconds": 10
   }
 }

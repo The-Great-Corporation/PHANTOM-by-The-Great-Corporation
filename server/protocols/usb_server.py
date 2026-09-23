@@ -143,10 +143,17 @@ class USBServer:
             
             if not client_id:
                 logger.warning("Received message without client_id")
-                return
+                return None
             
             if msg_type == 'connect':
                 response = self.authenticator.begin(data, writer.get_extra_info('peername'))
+                self._pending_auth.add(writer)
+                writer.write((json.dumps(response) + '\n').encode('utf-8'))
+                await writer.drain()
+                return None
+
+            if msg_type == 'reconnect_begin':
+                response = self.authenticator.begin_reconnect(data, writer.get_extra_info('peername'))
                 self._pending_auth.add(writer)
                 writer.write((json.dumps(response) + '\n').encode('utf-8'))
                 await writer.drain()
@@ -156,6 +163,33 @@ class USBServer:
                 if writer not in self._pending_auth:
                     raise SessionSecurityError("authentication handshake not started")
                 session = self.authenticator.complete(data, writer.get_extra_info('peername'))
+                client_id = session.identity.device_id
+                accepted = await self.connection_manager.connect_client(
+                    client_id,
+                    'usb',
+                    writer.get_extra_info('peername')[0]
+                )
+                if not accepted:
+                    return None
+                self._client_sockets[client_id] = (reader, writer)
+                self._sessions[writer] = session
+
+                # Send connection confirmation
+                response = json.dumps({
+                    'type': 'connected',
+                    'client_id': client_id,
+                    'session_id': session.identity.session_id,
+                    'server_challenge': data.get('challenge'),
+                })
+                writer.write((response + '\n').encode('utf-8'))
+                await writer.drain()
+                self._pending_auth.discard(writer)
+                return client_id
+
+            if msg_type == 'reconnect_proof':
+                if writer not in self._pending_auth:
+                    raise SessionSecurityError("authentication handshake not started")
+                session = self.authenticator.complete_reconnect(data, writer.get_extra_info('peername'))
                 client_id = session.identity.device_id
                 accepted = await self.connection_manager.connect_client(
                     client_id,

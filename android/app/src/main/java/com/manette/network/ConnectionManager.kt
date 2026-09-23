@@ -5,12 +5,23 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class ConnectionState(
     val connected: Boolean = false,
     val connectionType: String = "none",
     val latency: Int = 0,
-    val serverIp: String = ""
+    val serverIp: String = "",
+    val isReconnecting: Boolean = false,
+    val error: String? = null
 )
 
 class ConnectionManager(private val context: Context) {
@@ -18,6 +29,9 @@ class ConnectionManager(private val context: Context) {
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     private var currentClient: NetworkClient? = null
+    private val connectionMutex = Mutex()
+    private var heartbeatJob: Job? = null
+    private val heartbeatScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Appelé par le ViewModel pour recevoir les événements de rumble du serveur PC. */
     var onVibrationReceived: ((Float, Float, Float) -> Unit)? = null
@@ -30,42 +44,87 @@ class ConnectionManager(private val context: Context) {
         tokenId: String? = null,
         tokenSecret: String? = null
     ): Boolean {
-        disconnect()
-
-        currentClient = when (connectionType) {
-            "udp" -> UdpClient(
-                serverIp = serverIp,
-                port = port,
-                deviceId = deviceId,
-                tokenId = tokenId,
-                tokenSecret = tokenSecret,
-                onLatencyUpdated = { lat -> updateLatency(lat) },
-                onVibrationReceived = onVibrationReceived
-            )
-            "websocket" -> WebSocketClient(serverIp, port, deviceId, tokenId, tokenSecret)
-            "bluetooth" -> BluetoothClient(port, deviceId, tokenId, tokenSecret)
-            "usb" -> UsbClient(port, deviceId, tokenId, tokenSecret)
-            else -> return false
-        }
-
-        val success = currentClient?.connect() ?: false
-
-        if (success) {
+        return connectionMutex.withLock {
+            val existing = _connectionState.value
+            if (existing.connected &&
+                existing.connectionType == connectionType &&
+                existing.serverIp == serverIp
+            ) {
+                return@withLock true
+            }
+            disconnect()
             _connectionState.value = ConnectionState(
-                connected = true,
                 connectionType = connectionType,
-                serverIp = serverIp
+                serverIp = serverIp,
+                isReconnecting = true
             )
-            Log.d("ConnectionManager", "Connected via $connectionType")
-        } else {
-            _connectionState.value = ConnectionState()
-            Log.e("ConnectionManager", "Failed to connect via $connectionType")
-        }
 
-        return success
+            currentClient = when (connectionType) {
+                "udp" -> UdpClient(
+                    serverIp = serverIp,
+                    port = port,
+                    deviceId = deviceId,
+                    tokenId = tokenId,
+                    tokenSecret = tokenSecret,
+                    onLatencyUpdated = { lat -> updateLatency(lat) },
+                    onVibrationReceived = onVibrationReceived
+                )
+                "websocket" -> WebSocketClient(serverIp, port, deviceId, tokenId, tokenSecret)
+                "bluetooth" -> BluetoothClient(port, deviceId, tokenId, tokenSecret)
+                "usb" -> UsbClient(port, deviceId, tokenId, tokenSecret)
+                else -> return@withLock false
+            }
+
+            val success = currentClient?.connect() ?: false
+
+            if (success) {
+                _connectionState.value = ConnectionState(
+                    connected = true,
+                    connectionType = connectionType,
+                    serverIp = serverIp,
+                    isReconnecting = false
+                )
+                heartbeatJob?.cancel()
+                heartbeatJob = heartbeatScope.launch {
+                    while (isActive) {
+                        delay(5_000)
+                        val sent = currentClient?.sendHeartbeat() == true
+                        if (!sent && isActive) {
+                            Log.w(
+                                "ConnectionManager",
+                                "Authenticated heartbeat failed via $connectionType"
+                            )
+                            currentClient?.disconnect()
+                            currentClient = null
+                            _connectionState.value = ConnectionState(
+                                connectionType = connectionType,
+                                serverIp = serverIp,
+                                isReconnecting = false,
+                                error = "Connexion perdue : le serveur ne répond plus."
+                            )
+                            heartbeatJob?.cancel()
+                        }
+                    }
+                }
+                Log.d("ConnectionManager", "Connected via $connectionType")
+            } else {
+                currentClient = null
+                _connectionState.value = ConnectionState(
+                    connectionType = connectionType,
+                    serverIp = serverIp,
+                    isReconnecting = false,
+                    error = "Connexion impossible au serveur."
+                )
+                Log.e("ConnectionManager", "Failed to connect via $connectionType")
+            }
+
+            success
+        }
     }
 
     suspend fun disconnect() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
         currentClient?.disconnect()
         currentClient = null
         _connectionState.value = ConnectionState()

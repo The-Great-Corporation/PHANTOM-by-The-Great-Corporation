@@ -15,6 +15,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -154,38 +155,37 @@ fun FloatingJoystickZone(
     Box(
         modifier = modifier
             .pointerInput(Unit) {
-                // Fix P0-3 : awaitEachGesture + awaitFirstDown remplace detectDragGestures.
-                // detectDragGestures n'appelle onDragStart qu'après franchissement du seuil
-                // touchSlop (8–16 dp), retardant l'ancrage. Ici, le joystick s'ancre
-                // dès le premier toucher, sans seuil.
                 awaitEachGesture {
-                    // Attendre le premier contact — SANS seuil de glissement
                     val down = awaitFirstDown(requireUnconsumed = false)
                     down.consume()
 
-                    // Ancrer immédiatement au point de contact
+                    // L'ancre est fixée une seule fois, au début du geste.
                     anchorOffset = down.position
                     thumbOffset = Offset.Zero
                     onMove(0f, 0f)
 
-                    // Suivre les mouvements du même pointerId
                     val pointerId = down.id
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val pointer = event.changes.firstOrNull { it.id == pointerId }
-                            ?: break  // doigt levé
+                    try {
+                        while (true) {
+                            // Le passage initial évite qu'un composant visuel
+                            // recouvrant la zone ne déplace ou n'annule le stick.
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val pointer = event.changes.firstOrNull { it.id == pointerId }
+                                ?: break
 
-                        if (!pointer.pressed) {
-                            // Doigt relevé → reset
-                            anchorOffset = null
-                            thumbOffset = Offset.Zero
-                            onMove(0f, 0f)
-                            break
+                            if (!pointer.pressed) {
+                                break
+                            }
+
+                            pointer.consume()
+                            updateKnob(pointer.position - down.position)
                         }
-
-                        pointer.consume()
-                        val anchor = anchorOffset ?: break
-                        updateKnob(pointer.position - anchor)
+                    } finally {
+                        // Toute sortie du geste (up, cancel ou perte du pointeur)
+                        // remet le stick au neutre exactement une fois.
+                        anchorOffset = null
+                        thumbOffset = Offset.Zero
+                        onMove(0f, 0f)
                     }
                 }
             }

@@ -92,6 +92,11 @@ class WebSocketServer:
                         await websocket.send(json.dumps(
                             self.authenticator.begin(data, address)
                         ))
+                    elif msg_type == 'reconnect_begin' and not authenticated:
+                        client_id = data.get('device_id') or data.get('client_id')
+                        await websocket.send(json.dumps(
+                            self.authenticator.begin_reconnect(data, address)
+                        ))
                     elif msg_type == 'pair_proof' and not authenticated:
                         session = self.authenticator.complete(data, address)
                         client_id = session.identity.device_id
@@ -104,7 +109,27 @@ class WebSocketServer:
                         authenticated = True
                         self.clients[client_id] = websocket
                         await websocket.send(json.dumps({
-                            'type': 'connected', 'client_id': client_id,
+                            'type': 'connected',
+                            'client_id': client_id,
+                            'device_id': client_id,
+                            'session_id': session.identity.session_id,
+                            'server_challenge': data.get('challenge'),
+                        }))
+                    elif msg_type == 'reconnect_proof' and not authenticated:
+                        session = self.authenticator.complete_reconnect(data, address)
+                        client_id = session.identity.device_id
+                        accepted = await self.connection_manager.connect_client(
+                            client_id, 'websocket', str(address)
+                        )
+                        if not accepted:
+                            await websocket.close(code=1008, reason='Maximum clients reached')
+                            return
+                        authenticated = True
+                        self.clients[client_id] = websocket
+                        await websocket.send(json.dumps({
+                            'type': 'connected',
+                            'client_id': client_id,
+                            'device_id': client_id,
                             'session_id': session.identity.session_id,
                             'server_challenge': data.get('challenge'),
                         }))

@@ -37,7 +37,7 @@ class BluetoothServer:
     async def start(self):
         """Start the Bluetooth server."""
         if bluetooth is None:
-            logger.error("pybluez not installed, cannot start Bluetooth server")
+            logger.warning("pybluez not installed, Bluetooth RFCOMM server is disabled")
             return
         
         logger.info(f"Starting Bluetooth RFCOMM server on port {self.port}")
@@ -153,6 +153,10 @@ class BluetoothServer:
                 response = self.authenticator.begin(data, address)
                 self._pending_auth.add(client_socket)
                 client_socket.send((json.dumps(response) + '\n').encode('utf-8'))
+            elif msg_type == 'reconnect_begin':
+                response = self.authenticator.begin_reconnect(data, address)
+                self._pending_auth.add(client_socket)
+                client_socket.send((json.dumps(response) + '\n').encode('utf-8'))
             elif msg_type == 'pair_proof':
                 if client_socket not in self._pending_auth:
                     raise SessionSecurityError("authentication handshake not started")
@@ -167,7 +171,29 @@ class BluetoothServer:
                 self._sessions[client_socket] = session
                 self._pending_auth.discard(client_socket)
                 client_socket.send((json.dumps({
-                    'type': 'connected', 'client_id': client_id,
+                    'type': 'connected',
+                    'client_id': client_id,
+                    'device_id': client_id,
+                    'session_id': session.identity.session_id,
+                    'server_challenge': data.get('challenge'),
+                }) + '\n').encode('utf-8'))
+            elif msg_type == 'reconnect_proof':
+                if client_socket not in self._pending_auth:
+                    raise SessionSecurityError("authentication handshake not started")
+                session = self.authenticator.complete_reconnect(data, address)
+                client_id = session.identity.device_id
+                accepted = await self.connection_manager.connect_client(
+                    client_id, 'bluetooth', str(address[0])
+                )
+                if not accepted:
+                    raise SessionSecurityError("maximum clients reached")
+                self._client_sockets[client_id] = client_socket
+                self._sessions[client_socket] = session
+                self._pending_auth.discard(client_socket)
+                client_socket.send((json.dumps({
+                    'type': 'connected',
+                    'client_id': client_id,
+                    'device_id': client_id,
                     'session_id': session.identity.session_id,
                     'server_challenge': data.get('challenge'),
                 }) + '\n').encode('utf-8'))

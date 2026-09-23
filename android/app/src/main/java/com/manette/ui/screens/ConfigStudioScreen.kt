@@ -339,7 +339,67 @@ fun ConfigStudioScreen(
                         }
                     }
 
-                    // ── Accordéon Réglages Avancés (IP et Port uniquement) ────
+                    // ── Statut d'appairage & Scan QR direct (Discret) ─────────
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = if (pairingRequired) Color(0xFFFFB74D) else Color(0xFF00E676),
+                                modifier = Modifier.size(8.dp)
+                            ) {}
+                            Text(
+                                if (pairingRequired) "Appairage serveur requis" else "Serveur appairé (Keystore)",
+                                fontSize = 11.sp,
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = GamepadPrimary,
+                            modifier = Modifier.clickable {
+                                val activity = context as? Activity
+                                if (activity == null) {
+                                    Toast.makeText(context, "Scanner indisponible.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val intent = IntentIntegrator(activity)
+                                        .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                                        .setPrompt("Scannez le QR PHANTOM affiché par le serveur")
+                                        .setBeepEnabled(false)
+                                        .createScanIntent()
+                                    qrScanner.launch(intent)
+                                }
+                            }
+                        ) {
+                            Text(
+                                "📷 Scanner QR",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    pairingMessage?.let {
+                        Text(
+                            it,
+                            fontSize = 11.sp,
+                            color = if (pairingRequired) Color(0xFFFFB74D) else Color.White
+                        )
+                    }
+
+                    // ── Accordéon Réglages Avancés (IP, Port & Saisie manuelle d'appairage) ────
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -349,7 +409,7 @@ fun ConfigStudioScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "⚙ Réglages réseau avancés (IP & Port)",
+                            "⚙ Réglages avancés (IP, Port & Clés d'appairage)",
                             fontSize = 12.sp,
                             color = Color.Gray,
                             fontWeight = FontWeight.Medium
@@ -362,6 +422,7 @@ fun ConfigStudioScreen(
                     }
 
                     if (advancedExpanded) {
+                        var pairingText by remember { mutableStateOf("") }
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             OutlinedTextField(
                                 value = serverIp,
@@ -398,72 +459,41 @@ fun ConfigStudioScreen(
                                     color = GamepadPrimary
                                 )
                             }
-                        }
-                    }
-                }
-            }
 
-            // ── Appairage temporaire ──
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = GamepadSurface),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                var pairingText by remember { mutableStateOf("") }
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text("🔐 APPAIRAGE DU SERVEUR", fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold, color = GamepadPrimary)
-                    Text(
-                        if (pairingRequired) "Scannez le QR affiché par le serveur, ou utilisez la saisie manuelle ci-dessous."
-                        else "Credentials enregistrés dans le stockage sécurisé Android Keystore.",
-                        fontSize = 11.sp, color = Color.White.copy(alpha = 0.75f)
-                    )
-                    OutlinedTextField(
-                        value = pairingText,
-                        onValueChange = { pairingText = it },
-                        label = { Text("Payload JSON temporaire") },
-                        minLines = 3,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = GamepadPrimary, unfocusedBorderColor = Color.Gray
-                        )
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                val activity = context as? Activity
-                                if (activity == null) {
-                                    Toast.makeText(context, "Scanner indisponible.", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    val intent = IntentIntegrator(activity)
-                                        .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                                        .setPrompt("Scannez le QR PHANTOM affiché par le serveur")
-                                        .setBeepEnabled(false)
-                                        .createScanIntent()
-                                    qrScanner.launch(intent)
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = GamepadPrimary)
-                        ) { Text("Scanner le QR", color = Color.Black) }
-                        Button(
-                            onClick = {
-                                val error = viewModel.savePairingPayload(pairingText)
-                                if (error == null) pairingText = ""
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = GamepadPrimary)
-                        ) { Text("Enregistrer", color = Color.Black) }
-                    }
-                    OutlinedButton(
-                        onClick = { viewModel.clearPairing() },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Révoquer", color = Color.White) }
-                    pairingMessage?.let {
-                        Text(it, fontSize = 11.sp, color = if (pairingRequired) Color(0xFFFFB74D) else Color.White)
+                            Divider(color = Color.White.copy(alpha = 0.15f), modifier = Modifier.padding(vertical = 4.dp))
+
+                            Text(
+                                "🔐 Saisie manuelle du Payload d'appairage JSON",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = GamepadPrimary
+                            )
+                            OutlinedTextField(
+                                value = pairingText,
+                                onValueChange = { pairingText = it },
+                                label = { Text("Payload JSON d'appairage") },
+                                minLines = 2,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = GamepadPrimary,
+                                    unfocusedBorderColor = Color.Gray
+                                )
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        val error = viewModel.savePairingPayload(pairingText)
+                                        if (error == null) pairingText = ""
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = GamepadPrimary)
+                                ) { Text("Enregistrer les clés", color = Color.Black, fontSize = 11.sp) }
+                                OutlinedButton(
+                                    onClick = { viewModel.clearPairing() },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Révoquer clés", color = Color.White, fontSize = 11.sp) }
+                            }
+                        }
                     }
                 }
             }

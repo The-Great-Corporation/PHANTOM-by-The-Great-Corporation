@@ -28,8 +28,8 @@ class UsbClient(
     private val sequence = AtomicLong(0)
 
     override suspend fun connect(): Boolean = withContext(Dispatchers.IO) {
-        if (listOf(deviceId, tokenId, tokenSecret).any { it.isNullOrEmpty() }) {
-            Log.e("UsbClient", "USB credentials (deviceId, tokenId, tokenSecret) are required")
+        if (deviceId.isNullOrEmpty() || tokenSecret.isNullOrEmpty()) {
+            Log.e("UsbClient", "USB credentials (deviceId, tokenSecret) are required")
             return@withContext false
         }
         try {
@@ -37,53 +37,104 @@ class UsbClient(
             outputStream = socket?.getOutputStream()
             inputStream = socket?.getInputStream()
 
-            val clientIdentifier = deviceId ?: clientId
+            val clientIdentifier = deviceId
             val clientNonce = UUID.randomUUID().toString()
-            sendMessage(mapOf(
-                "type" to "connect",
-                "client_id" to clientIdentifier,
-                "device_id" to clientIdentifier,
-                "token_id" to tokenId,
-                "client_nonce" to clientNonce
-            ))
 
+            var isConnected = false
             val reader = inputStream?.bufferedReader() ?: throw IllegalStateException("USB reader unavailable")
-            val challengeLine = reader.readLine() ?: throw IllegalStateException("USB challenge missing")
-            val challengeMap = gson.fromJson(challengeLine, Map::class.java) as? Map<*, *> ?: throw IllegalStateException("USB challenge invalid")
-            if (challengeMap["type"] != "pair_challenge" || tokenSecret.isNullOrEmpty() || tokenId.isNullOrEmpty() || deviceId.isNullOrEmpty()) {
-                throw IllegalStateException("USB authentication challenge missing")
+
+            // Try reconnect_begin
+            try {
+                sendMessage(mapOf(
+                    "type" to "reconnect_begin",
+                    "client_id" to clientIdentifier,
+                    "device_id" to clientIdentifier,
+                    "client_nonce" to clientNonce
+                ))
+
+                val challengeLine = reader.readLine()
+                if (challengeLine != null) {
+                    val challengeMap = gson.fromJson(challengeLine, Map::class.java) as? Map<*, *>
+                    if (challengeMap?.get("type") == "reconnect_challenge") {
+                        val challengeId = challengeMap["challenge_id"] as? String ?: error("challenge_id missing")
+                        val challenge = challengeMap["challenge"] as? String ?: error("challenge missing")
+                        val proof = UdpClient.computeReconnectProof(tokenSecret, clientIdentifier, clientNonce, challengeId, challenge)
+                        sendMessage(mapOf(
+                            "type" to "reconnect_proof",
+                            "client_id" to clientIdentifier,
+                            "device_id" to clientIdentifier,
+                            "client_nonce" to clientNonce,
+                            "challenge_id" to challengeId,
+                            "challenge" to challenge,
+                            "proof" to proof
+                        ))
+
+                        val ackLine = reader.readLine()
+                        if (ackLine != null) {
+                            val ack = gson.fromJson(ackLine, Map::class.java) as? Map<*, *>
+                            if (ack?.get("type") == "connected") {
+                                val sid = ack["session_id"] as? String ?: error("session_id missing")
+                                val serverChallenge = ack["server_challenge"] as? String ?: error("server_challenge missing")
+                                sessionId = sid
+                                sessionSecret = UdpClient.deriveSessionSecret(tokenSecret, clientNonce, serverChallenge, sid)
+                                sequence.set(0)
+                                isConnected = true
+                                Log.d("UsbClient", "Connected via USB (ADB) - Reconnected")
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d("UsbClient", "USB reconnection attempt failed, trying initial pairing if token available: ${e.message}")
             }
 
-            val challengeId = challengeMap["challenge_id"] as? String ?: throw IllegalStateException("challenge_id missing")
-            val challenge = challengeMap["challenge"] as? String ?: throw IllegalStateException("challenge missing")
-            val proof = UdpClient.computePairingProof(tokenSecret, tokenId, deviceId, clientNonce, challengeId, challenge)
-            sendMessage(mapOf(
-                "type" to "pair_proof",
-                "client_id" to clientIdentifier,
-                "device_id" to clientIdentifier,
-                "token_id" to tokenId,
-                "client_nonce" to clientNonce,
-                "challenge_id" to challengeId,
-                "challenge" to challenge,
-                "proof" to proof
-            ))
+            // Fallback to initial pairing if reconnection did not succeed and tokenId is available
+            if (!isConnected && !tokenId.isNullOrEmpty()) {
+                sendMessage(mapOf(
+                    "type" to "connect",
+                    "client_id" to clientIdentifier,
+                    "device_id" to clientIdentifier,
+                    "token_id" to tokenId,
+                    "client_nonce" to clientNonce
+                ))
 
-            val ackLine = reader.readLine() ?: throw IllegalStateException("USB authentication ack missing")
-            val ack = gson.fromJson(ackLine, Map::class.java) as? Map<*, *> ?: throw IllegalStateException("USB ack invalid")
-            if (ack["type"] != "connected") {
-                throw IllegalStateException("USB authentication acknowledgement missing")
+                val challengeLine = reader.readLine() ?: throw IllegalStateException("USB challenge missing")
+                val challengeMap = gson.fromJson(challengeLine, Map::class.java) as? Map<*, *> ?: throw IllegalStateException("USB challenge invalid")
+                if (challengeMap["type"] == "pair_challenge") {
+                    val challengeId = challengeMap["challenge_id"] as? String ?: throw IllegalStateException("challenge_id missing")
+                    val challenge = challengeMap["challenge"] as? String ?: throw IllegalStateException("challenge missing")
+                    val proof = UdpClient.computePairingProof(tokenSecret, tokenId, clientIdentifier, clientNonce, challengeId, challenge)
+                    sendMessage(mapOf(
+                        "type" to "pair_proof",
+                        "client_id" to clientIdentifier,
+                        "device_id" to clientIdentifier,
+                        "token_id" to tokenId,
+                        "client_nonce" to clientNonce,
+                        "challenge_id" to challengeId,
+                        "challenge" to challenge,
+                        "proof" to proof
+                    ))
+
+                    val ackLine = reader.readLine() ?: throw IllegalStateException("USB authentication ack missing")
+                    val ack = gson.fromJson(ackLine, Map::class.java) as? Map<*, *> ?: throw IllegalStateException("USB ack invalid")
+                    if (ack["type"] == "connected") {
+                        val sid = ack["session_id"] as? String ?: throw IllegalStateException("session_id missing")
+                        val serverChallenge = ack["server_challenge"] as? String ?: throw IllegalStateException("server_challenge missing")
+                        sessionId = sid
+                        sessionSecret = UdpClient.deriveSessionSecret(tokenSecret, clientNonce, serverChallenge, sid)
+                        sequence.set(0)
+                        isConnected = true
+                        Log.d("UsbClient", "Connected via USB (ADB) - Initial QR pairing")
+                    }
+                }
             }
-            val sid = ack["session_id"] as? String ?: throw IllegalStateException("session_id missing")
-            val serverChallenge = ack["server_challenge"] as? String
-                ?: throw IllegalStateException("server_challenge missing")
-            sessionId = sid
-            sessionSecret = UdpClient.deriveSessionSecret(
-                tokenSecret, clientNonce, serverChallenge, sid
-            )
-            sequence.set(0)
+
+            if (!isConnected) {
+                disconnect()
+                return@withContext false
+            }
+
             authenticated = true
-
-            Log.d("UsbClient", "Connected via USB (ADB)")
             true
         } catch (e: Exception) {
             authenticated = false

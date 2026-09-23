@@ -38,6 +38,31 @@ class StreamAuthenticator:
             address,
         )
 
+    def begin_reconnect(self, message: Mapping[str, Any], address: tuple) -> dict:
+        device_id = message.get("device_id") or message.get("client_id")
+        client_nonce = message.get("client_nonce")
+        challenge = self.security.create_reconnect_challenge(
+            device_id, client_nonce, address
+        )
+        return {
+            "type": "reconnect_challenge",
+            "challenge_id": challenge.challenge_id,
+            "challenge": challenge.challenge,
+        }
+
+    def complete_reconnect(
+        self, message: Mapping[str, Any], address: tuple
+    ) -> AuthenticatedSession:
+        device_id = message.get("device_id") or message.get("client_id")
+        return self.security.consume_reconnect_challenge(
+            message.get("challenge_id"),
+            message.get("challenge"),
+            device_id,
+            message.get("client_nonce"),
+            message.get("proof"),
+            address,
+        )
+
     def verify_message(
         self, session: AuthenticatedSession, message: Mapping[str, Any]
     ) -> Any:

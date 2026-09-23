@@ -74,6 +74,8 @@ fun GameScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE) {
                 viewModel.releaseAllInputs()
+            } else if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.reconnectAfterResume()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -228,6 +230,7 @@ fun GameScreen(
             sensitivity = sensitivity,
             deadzone = deadzone,
             latency = connectionState.latency,
+            connected = connectionState.connected,
             connectionType = when (operationMode) {
                 OperationMode.THE_GREAT -> connectionState.connectionType
                 OperationMode.PLUG_AND_PLAY -> "bluetooth_hid"

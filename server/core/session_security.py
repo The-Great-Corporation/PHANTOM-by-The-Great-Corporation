@@ -1,8 +1,8 @@
-"""In-memory primitives for authenticated pairing sessions.
+"""In-memory primitives for authenticated pairing sessions and remembered enrollment.
 
 This module deliberately does not know about any transport or wire protocol.
 Secrets live only in memory and are generated when a pairing token is
-consumed.
+consumed or an enrolled device is reconnected.
 """
 
 import hashlib
@@ -11,7 +11,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Mapping, Set
+from typing import Any, Callable, Dict, Mapping, Optional, Set
 
 
 class SessionSecurityError(Exception):
@@ -48,6 +48,22 @@ class InvalidMacError(SessionSecurityError):
 
 class InvalidPairingChallengeError(SessionSecurityError):
     """Raised when a pairing challenge is unknown, invalid, or already used."""
+
+
+class UnknownEnrolledDeviceError(SessionSecurityError):
+    """Raised when a device is not in the enrolled device registry."""
+
+
+class EnrolledDeviceExpiredError(SessionSecurityError):
+    """Raised when an enrolled device TTL has expired."""
+
+
+class EnrolledDeviceRevokedError(SessionSecurityError):
+    """Raised when an enrolled device has been explicitly revoked."""
+
+
+class InvalidReconnectChallengeError(SessionSecurityError):
+    """Raised when a reconnect challenge is unknown, invalid, expired, or consumed."""
 
 
 @dataclass(frozen=True)
@@ -91,6 +107,30 @@ class PairingChallenge:
     consumed: bool = False
 
 
+@dataclass
+class EnrolledDevice:
+    """Device enrolled on server after initial QR handshake."""
+
+    device_id: str
+    enrollment_secret: str = field(repr=False)
+    registered_at: float
+    last_activity: float
+    is_revoked: bool = False
+
+
+@dataclass
+class ReconnectChallenge:
+    """Short-lived server challenge bound to a device reconnection attempt."""
+
+    challenge_id: str
+    challenge: str
+    device_id: str
+    client_nonce: str
+    address: tuple
+    expires_at: float
+    consumed: bool = False
+
+
 Message = Mapping[str, Any]
 Clock = Callable[[], float]
 
@@ -101,7 +141,7 @@ def derive_session_secret(
     server_challenge: str,
     session_id: str,
 ) -> bytes:
-    """Derive the UDP session key without transmitting it on the wire."""
+    """Derive the session key without transmitting it on the wire."""
     if not all(
         isinstance(value, str) and value
         for value in (token_secret, client_nonce, server_challenge, session_id)
@@ -161,6 +201,36 @@ def compute_pairing_proof(
     ).hexdigest()
 
 
+def compute_reconnect_proof(
+    enrollment_secret: str,
+    device_id: str,
+    client_nonce: str,
+    challenge_id: str,
+    challenge: str,
+) -> str:
+    """Create a reconnection proof over the reconnect transcript."""
+    if not all(
+        isinstance(value, str) and value
+        for value in (enrollment_secret, device_id, client_nonce, challenge_id, challenge)
+    ):
+        raise ValueError("reconnect proof inputs must be non-empty strings")
+    transcript = json.dumps(
+        {
+            "type": "reconnect_proof",
+            "device_id": device_id,
+            "client_nonce": client_nonce,
+            "challenge_id": challenge_id,
+            "challenge": challenge,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hmac.new(
+        enrollment_secret.encode("utf-8"), transcript, hashlib.sha256
+    ).hexdigest()
+
+
 def canonicalize_message(sequence: int, message: Message) -> bytes:
     """Return the deterministic bytes covered by a session MAC."""
     _validate_sequence(sequence)
@@ -179,15 +249,24 @@ def canonicalize_message(sequence: int, message: Message) -> bytes:
 
 
 class SessionSecurity:
-    """Issue pairing tokens and authenticate messages for in-memory sessions."""
+    """Issue pairing tokens, manage device enrollments and authenticate sessions."""
 
-    def __init__(self, clock: Clock = time.monotonic):
+    def __init__(
+        self,
+        clock: Clock = time.monotonic,
+        remembered_device_ttl_seconds: float = 2592000.0,
+        reconnect_challenge_ttl_seconds: float = 10.0,
+    ):
         self._clock = clock
+        self._remembered_device_ttl_seconds = remembered_device_ttl_seconds
+        self._reconnect_challenge_ttl_seconds = reconnect_challenge_ttl_seconds
         self._tokens: Dict[str, PairingToken] = {}
         self._consumed_tokens: Set[str] = set()
         self._sessions: Dict[str, AuthenticatedSession] = {}
         self._seen_sequences: Dict[str, Set[int]] = {}
         self._challenges: Dict[str, PairingChallenge] = {}
+        self._enrolled_devices: Dict[str, EnrolledDevice] = {}
+        self._reconnect_challenges: Dict[str, ReconnectChallenge] = {}
 
     def issue_pairing_token(self, device_id: str, ttl_seconds: float = 60.0) -> PairingToken:
         if not isinstance(device_id, str) or not device_id:
@@ -256,6 +335,15 @@ class SessionSecurity:
         )
         self._sessions[session.identity.session_id] = session
         self._seen_sequences[session.identity.session_id] = set()
+
+        # Enroll device on server
+        self._enrolled_devices[issued_token.device_id] = EnrolledDevice(
+            device_id=issued_token.device_id,
+            enrollment_secret=issued_token.value,
+            registered_at=current_time,
+            last_activity=current_time,
+            is_revoked=False,
+        )
         return session
 
     def create_pairing_challenge(
@@ -320,14 +408,15 @@ class SessionSecurity:
             or pending.address != address
         ):
             raise InvalidPairingChallengeError("pairing challenge binding does not match")
-        if self._clock() >= pending.expires_at:
+        now = self._clock()
+        if now >= pending.expires_at:
             raise InvalidPairingChallengeError("pairing challenge has expired")
         token = self._tokens.get(token_id)
         if token is None:
             raise UnknownPairingTokenError("pairing token is unknown")
         if token_id in self._consumed_tokens:
             raise PairingTokenConsumedError("pairing token has already been consumed")
-        if self._clock() >= token.expires_at:
+        if now >= token.expires_at:
             raise PairingTokenExpiredError("pairing token has expired")
         if not isinstance(proof, str):
             raise InvalidMacError("pairing proof is required")
@@ -337,11 +426,8 @@ class SessionSecurity:
         if not hmac.compare_digest(expected_proof, proof):
             raise InvalidMacError("pairing proof does not match")
 
-        # This method is synchronous and therefore atomic with respect to the
-        # asyncio event loop: no await occurs between validation and consumption.
         pending.consumed = True
         self._consumed_tokens.add(token_id)
-        now = self._clock()
         session_id = secrets.token_urlsafe(24)
         session = AuthenticatedSession(
             identity=DeviceIdentity(device_id=device_id, session_id=session_id),
@@ -352,7 +438,126 @@ class SessionSecurity:
         )
         self._sessions[session_id] = session
         self._seen_sequences[session_id] = set()
+
+        # Enroll device on server
+        self._enrolled_devices[device_id] = EnrolledDevice(
+            device_id=device_id,
+            enrollment_secret=token.value,
+            registered_at=now,
+            last_activity=now,
+            is_revoked=False,
+        )
         return session
+
+    def create_reconnect_challenge(
+        self,
+        device_id: str,
+        client_nonce: str,
+        address: tuple,
+        ttl_seconds: Optional[float] = None,
+    ) -> ReconnectChallenge:
+        """Create a short-lived challenge for an enrolled device reconnection."""
+        if not isinstance(device_id, str) or not device_id:
+            raise ValueError("device_id must be a non-empty string")
+        if not isinstance(client_nonce, str) or not client_nonce:
+            raise ValueError("client_nonce must be a non-empty string")
+        if not isinstance(address, tuple) or not address:
+            raise ValueError("reconnect challenge address is required")
+
+        enrolled = self._enrolled_devices.get(device_id)
+        if enrolled is None:
+            raise UnknownEnrolledDeviceError("device is not enrolled")
+        if enrolled.is_revoked:
+            raise EnrolledDeviceRevokedError("device enrollment is revoked")
+
+        now = self._clock()
+        if now - enrolled.last_activity > self._remembered_device_ttl_seconds:
+            raise EnrolledDeviceExpiredError("device enrollment has expired")
+
+        actual_ttl = ttl_seconds if ttl_seconds is not None else self._reconnect_challenge_ttl_seconds
+        if actual_ttl <= 0:
+            raise ValueError("challenge ttl must be positive")
+
+        challenge = ReconnectChallenge(
+            challenge_id=secrets.token_urlsafe(16),
+            challenge=secrets.token_urlsafe(32),
+            device_id=device_id,
+            client_nonce=client_nonce,
+            address=address,
+            expires_at=now + actual_ttl,
+        )
+        self._reconnect_challenges[challenge.challenge_id] = challenge
+        return challenge
+
+    def consume_reconnect_challenge(
+        self,
+        challenge_id: str,
+        challenge: str,
+        device_id: str,
+        client_nonce: str,
+        proof: str,
+        address: tuple,
+    ) -> AuthenticatedSession:
+        """Verify reconnection proof and create a new authenticated session."""
+        pending = self._reconnect_challenges.get(challenge_id)
+        if pending is None or pending.consumed:
+            raise InvalidReconnectChallengeError("reconnect challenge is unknown or consumed")
+        if (
+            pending.challenge != challenge
+            or pending.device_id != device_id
+            or pending.client_nonce != client_nonce
+            or pending.address != address
+        ):
+            raise InvalidReconnectChallengeError("reconnect challenge binding does not match")
+
+        now = self._clock()
+        if now >= pending.expires_at:
+            raise InvalidReconnectChallengeError("reconnect challenge has expired")
+
+        enrolled = self._enrolled_devices.get(device_id)
+        if enrolled is None:
+            raise UnknownEnrolledDeviceError("device is not enrolled")
+        if enrolled.is_revoked:
+            raise EnrolledDeviceRevokedError("device enrollment is revoked")
+        if now - enrolled.last_activity > self._remembered_device_ttl_seconds:
+            raise EnrolledDeviceExpiredError("device enrollment has expired")
+
+        if not isinstance(proof, str):
+            raise InvalidMacError("reconnect proof is required")
+
+        expected_proof = compute_reconnect_proof(
+            enrolled.enrollment_secret, device_id, client_nonce, challenge_id, challenge
+        )
+        if not hmac.compare_digest(expected_proof, proof):
+            raise InvalidMacError("reconnect proof does not match")
+
+        # Mark challenge consumed and update last_activity to now (sliding TTL window pushed forward)
+        pending.consumed = True
+        enrolled.last_activity = now
+
+        session_id = secrets.token_urlsafe(24)
+        session = AuthenticatedSession(
+            identity=DeviceIdentity(device_id=device_id, session_id=session_id),
+            created_at=now,
+            shared_secret=derive_session_secret(
+                enrolled.enrollment_secret, client_nonce, challenge, session_id
+            ),
+        )
+        self._sessions[session_id] = session
+        self._seen_sequences[session_id] = set()
+        return session
+
+    def get_enrolled_device(self, device_id: str) -> Optional[EnrolledDevice]:
+        """Get information on an enrolled device."""
+        return self._enrolled_devices.get(device_id)
+
+    def revoke_device(self, device_id: str) -> bool:
+        """Revoke an enrolled device immediately."""
+        enrolled = self._enrolled_devices.get(device_id)
+        if enrolled is not None:
+            enrolled.is_revoked = True
+            return True
+        return False
 
     def compute_mac(self, session_id: str, sequence: int, message: Message) -> bytes:
         session = self._get_session(session_id)

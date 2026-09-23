@@ -204,15 +204,51 @@ class PhantomServerApp:
         # Tab 1: Dashboard & Connection
         self.tab_dashboard = tk.Frame(self.notebook, bg=BG_COLOR)
         self.notebook.add(self.tab_dashboard, text=Translations["dashboard_tab"])
-        self._build_dashboard_tab()
+        self.dashboard_content = self._create_scrollable_tab(self.tab_dashboard)
+        self._build_dashboard_tab(self.dashboard_content)
 
         # Tab 2: Live Gamepad Visualizer & Logs
         self.tab_visualizer = tk.Frame(self.notebook, bg=BG_COLOR)
         self.notebook.add(self.tab_visualizer, text=Translations["visualizer_tab"])
-        self._build_visualizer_tab()
+        self.visualizer_content = self._create_scrollable_tab(self.tab_visualizer)
+        self._build_visualizer_tab(self.visualizer_content)
 
-    def _build_dashboard_tab(self):
-        grid_frame = tk.Frame(self.tab_dashboard, bg=BG_COLOR, padx=10, pady=10)
+    def _create_scrollable_tab(self, parent):
+        container = tk.Frame(parent, bg=BG_COLOR)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(container, bg=BG_COLOR, bd=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
+        content = tk.Frame(canvas, bg=BG_COLOR)
+        window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def update_scroll_region(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def resize_content(event):
+            canvas.itemconfigure(window_id, width=event.width)
+
+        content.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", resize_content)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def scroll_with_mouse(event):
+            canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        def bind_mousewheel(_event):
+            canvas.bind_all("<MouseWheel>", scroll_with_mouse, add="+")
+
+        def unbind_mousewheel(_event):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", bind_mousewheel)
+        canvas.bind("<Leave>", unbind_mousewheel)
+        return content
+
+    def _build_dashboard_tab(self, parent):
+        grid_frame = tk.Frame(parent, bg=BG_COLOR, padx=10, pady=10)
         grid_frame.pack(fill=tk.BOTH, expand=True)
 
         left_col = tk.Frame(grid_frame, bg=BG_COLOR)
@@ -276,6 +312,15 @@ class PhantomServerApp:
                                      font=("Segoe UI", 11, "bold"), padx=16, pady=16, bd=1, relief="solid")
         clients_card.pack(fill=tk.BOTH, expand=True)
 
+        self.clients_status_label = tk.Label(
+            clients_card,
+            text="Aucun contrôleur connecté",
+            bg=CARD_BG,
+            fg=TEXT_SECONDARY,
+            anchor="w",
+        )
+        self.clients_status_label.pack(fill=tk.X, pady=(0, 8))
+
         self.clients_tree = ttk.Treeview(clients_card, columns=("ID", "Protocole", "Adresse", "Latence"), show="headings", height=8, takefocus=True)
         self.clients_tree.heading("ID", text="Appareil")
         self.clients_tree.heading("Protocole", text="Protocole")
@@ -287,8 +332,8 @@ class PhantomServerApp:
         self.clients_tree.column("Latence", width=80)
         self.clients_tree.pack(fill=tk.BOTH, expand=True)
 
-    def _build_visualizer_tab(self):
-        split_frame = tk.Frame(self.tab_visualizer, bg=BG_COLOR, padx=10, pady=10)
+    def _build_visualizer_tab(self, parent):
+        split_frame = tk.Frame(parent, bg=BG_COLOR, padx=10, pady=10)
         split_frame.pack(fill=tk.BOTH, expand=True)
 
         vis_frame = tk.LabelFrame(split_frame, text=" Visualiseur Phantom en Direct ", bg=CARD_BG, fg=ACCENT_PRIMARY,
@@ -407,6 +452,16 @@ class PhantomServerApp:
             self._render_state(state)
 
             clients = self.server.connection_manager.get_all_clients()
+            if clients:
+                self.clients_status_label.configure(
+                    text=f"{len(clients)} contrôleur(s) connecté(s)",
+                    fg=SUCCESS_COLOR,
+                )
+            else:
+                self.clients_status_label.configure(
+                    text="Serveur actif — aucun contrôleur connecté",
+                    fg=TEXT_SECONDARY,
+                )
             current_items = self.clients_tree.get_children()
             client_ids = set(clients.keys())
 
@@ -508,7 +563,7 @@ class PhantomServerApp:
         try:
             port = self.server.config["server"]["udp_port"]
             result = generate_pairing_payload(
-                self.server.udp_security,
+                self.server.session_security,
                 device_id="android-device",
                 server=self.local_ip,
                 port=port,

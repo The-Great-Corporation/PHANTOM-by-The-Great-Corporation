@@ -27,6 +27,7 @@ fun QuickSettingsDrawer(
     sensitivity: Float,
     deadzone: Float,
     latency: Int,
+    connected: Boolean,
     connectionType: String,
     onSensitivityChange: (Float) -> Unit,
     onDeadzoneChange: (Float) -> Unit,
@@ -90,7 +91,7 @@ fun QuickSettingsDrawer(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                val isConnected = connectionType.lowercase() != "none" && connectionType.isNotBlank()
+                                val isConnected = connected
                                 val statusText = when {
                                     latency > 0 -> "${latency} ms"
                                     isConnected -> "Connecté"

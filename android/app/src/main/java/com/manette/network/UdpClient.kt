@@ -11,6 +11,7 @@ import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -32,7 +33,7 @@ class UdpClient(
     private val gson = Gson()
     private var receiveJob: Job? = null
     private var pingJob: Job? = null
-    private var lastPingSentTime: Long = 0L
+    private val pendingPings = ConcurrentHashMap<Long, Long>()
     private var sessionId: String? = null
     private var sessionSecret: ByteArray? = null
     private val sequence = AtomicLong(0)
@@ -52,6 +53,18 @@ class UdpClient(
                 .all { it.isNotEmpty() })
             val transcript = linkedMapOf<String, Any>(
                 "type" to "pair_proof", "token_id" to tokenId, "device_id" to deviceId,
+                "client_nonce" to clientNonce, "challenge_id" to challengeId, "challenge" to challenge
+            )
+            return hmacHex(tokenSecret, canonicalJson(transcript).toByteArray(StandardCharsets.UTF_8))
+        }
+
+        fun computeReconnectProof(
+            tokenSecret: String, deviceId: String, clientNonce: String,
+            challengeId: String, challenge: String
+        ): String {
+            require(listOf(tokenSecret, deviceId, clientNonce, challengeId, challenge).all { it.isNotEmpty() })
+            val transcript = linkedMapOf<String, Any>(
+                "type" to "reconnect_proof", "device_id" to deviceId,
                 "client_nonce" to clientNonce, "challenge_id" to challengeId, "challenge" to challenge
             )
             return hmacHex(tokenSecret, canonicalJson(transcript).toByteArray(StandardCharsets.UTF_8))
@@ -154,32 +167,75 @@ class UdpClient(
     }
 
     override suspend fun connect(): Boolean = withContext(Dispatchers.IO) {
-        if (listOf(deviceId, tokenId, tokenSecret).any { it.isNullOrEmpty() }) {
-            Log.e("UdpClient", "UDP credentials are required")
+        if (deviceId.isNullOrEmpty() || tokenSecret.isNullOrEmpty()) {
+            Log.e("UdpClient", "UDP credentials (deviceId, tokenSecret) are required")
             return@withContext false
         }
         try {
             socket = DatagramSocket().apply { soTimeout = HANDSHAKE_TIMEOUT_MS }
             serverAddress = InetAddress.getByName(serverIp)
             val nonce = randomNonce()
-            sendRaw(linkedMapOf("type" to "pair_begin", "device_id" to deviceId!!,
-                "token_id" to tokenId!!, "client_nonce" to nonce))
-            val challenge = receiveJson()
-            if (challenge["type"] != "pair_challenge") throw IllegalStateException("pair_challenge missing")
-            val challengeId = challenge["challenge_id"] as? String ?: error("challenge_id missing")
-            val challengeValue = challenge["challenge"] as? String ?: error("challenge missing")
-            val proof = computePairingProof(tokenSecret!!, tokenId, deviceId, nonce, challengeId, challengeValue)
-            sendRaw(linkedMapOf("type" to "pair_proof", "device_id" to deviceId,
-                "token_id" to tokenId, "client_nonce" to nonce, "challenge_id" to challengeId,
-                "challenge" to challengeValue, "proof" to proof))
-            val ack = receiveJson()
-            if (ack["type"] != "pair_ack" || ack["confirmation"] != "paired")
-                throw IllegalStateException("pair_ack missing")
-            val sid = ack["session_id"] as? String ?: error("session_id missing")
-            val serverChallenge = ack["server_challenge"] as? String ?: error("server_challenge missing")
-            sessionId = sid
-            sessionSecret = deriveSessionSecret(tokenSecret, nonce, serverChallenge, sid)
-            sequence.set(0)
+
+            var isConnected = false
+            // Try reconnect_begin first
+            try {
+                sendRaw(linkedMapOf("type" to "reconnect_begin", "device_id" to deviceId, "client_nonce" to nonce))
+                val response = receiveJson()
+                if (response["type"] == "reconnect_challenge") {
+                    val challengeId = response["challenge_id"] as? String ?: error("challenge_id missing")
+                    val challengeValue = response["challenge"] as? String ?: error("challenge missing")
+                    val proof = computeReconnectProof(tokenSecret, deviceId, nonce, challengeId, challengeValue)
+                    sendRaw(linkedMapOf(
+                        "type" to "reconnect_proof", "device_id" to deviceId,
+                        "client_nonce" to nonce, "challenge_id" to challengeId,
+                        "challenge" to challengeValue, "proof" to proof
+                    ))
+                    val ack = receiveJson()
+                    if (ack["type"] == "connected" || ack["type"] == "pair_ack") {
+                        val sid = ack["session_id"] as? String ?: error("session_id missing")
+                        val serverChallenge = ack["server_challenge"] as? String ?: error("server_challenge missing")
+                        sessionId = sid
+                        sessionSecret = deriveSessionSecret(tokenSecret, nonce, serverChallenge, sid)
+                        sequence.set(0)
+                        isConnected = true
+                        Log.d("UdpClient", "UDP reconnection successful")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d("UdpClient", "UDP reconnection attempt failed, trying initial pairing if token available: ${e.message}")
+            }
+
+            // Fallback to initial pairing if reconnection did not succeed and tokenId is available
+            if (!isConnected && !tokenId.isNullOrEmpty()) {
+                sendRaw(linkedMapOf("type" to "pair_begin", "device_id" to deviceId, "token_id" to tokenId, "client_nonce" to nonce))
+                val challenge = receiveJson()
+                if (challenge["type"] == "pair_challenge") {
+                    val challengeId = challenge["challenge_id"] as? String ?: error("challenge_id missing")
+                    val challengeValue = challenge["challenge"] as? String ?: error("challenge missing")
+                    val proof = computePairingProof(tokenSecret, tokenId, deviceId, nonce, challengeId, challengeValue)
+                    sendRaw(linkedMapOf(
+                        "type" to "pair_proof", "device_id" to deviceId,
+                        "token_id" to tokenId, "client_nonce" to nonce, "challenge_id" to challengeId,
+                        "challenge" to challengeValue, "proof" to proof
+                    ))
+                    val ack = receiveJson()
+                    if (ack["type"] == "pair_ack" && ack["confirmation"] == "paired") {
+                        val sid = ack["session_id"] as? String ?: error("session_id missing")
+                        val serverChallenge = ack["server_challenge"] as? String ?: error("server_challenge missing")
+                        sessionId = sid
+                        sessionSecret = deriveSessionSecret(tokenSecret, nonce, serverChallenge, sid)
+                        sequence.set(0)
+                        isConnected = true
+                        Log.d("UdpClient", "UDP initial QR pairing successful")
+                    }
+                }
+            }
+
+            if (!isConnected) {
+                disconnect()
+                return@withContext false
+            }
+
             socket!!.soTimeout = HANDSHAKE_TIMEOUT_MS
             startReceiver()
             pingJob = CoroutineScope(Dispatchers.IO).launch {
@@ -217,7 +273,15 @@ class UdpClient(
         try {
             val data = gson.fromJson(jsonStr, Map::class.java)
             when (data["type"] as? String) {
-                "pong" -> onLatencyUpdated?.invoke((System.currentTimeMillis() - lastPingSentTime).toInt().coerceAtLeast(1))
+                "pong" -> {
+                    val pongSequence = (data["sequence"] as? Double)?.toLong()
+                    val sentAt = pongSequence?.let { pendingPings.remove(it) }
+                    if (sentAt != null) {
+                        onLatencyUpdated?.invoke(
+                            (System.currentTimeMillis() - sentAt).toInt().coerceAtLeast(1)
+                        )
+                    }
+                }
                 "vibration" -> onVibrationReceived?.invoke(
                     (data["left_motor"] as? Double)?.toFloat() ?: 0f,
                     (data["right_motor"] as? Double)?.toFloat() ?: 0f,
@@ -227,13 +291,18 @@ class UdpClient(
     }
 
     private fun sendPing() {
-        lastPingSentTime = System.currentTimeMillis()
-        sendControl("ping", emptyMap())
+        val sentAt = System.currentTimeMillis()
+        sendControl("ping", emptyMap()) { sequenceNumber ->
+            pendingPings[sequenceNumber] = sentAt
+            if (pendingPings.size > 8) {
+                pendingPings.keys.minOrNull()?.let(pendingPings::remove)
+            }
+        }
     }
 
     override suspend fun disconnect() = withContext(Dispatchers.IO) {
         pingJob?.cancel(); receiveJob?.cancel(); socket?.close(); socket = null
-        sessionId = null; sessionSecret = null; sequence.set(0)
+        sessionId = null; sessionSecret = null; sequence.set(0); pendingPings.clear()
     }
 
     override suspend fun sendInput(inputData: Map<String, Any>): Boolean = withContext(Dispatchers.IO) {
@@ -244,11 +313,16 @@ class UdpClient(
         sendControl("heartbeat", emptyMap())
     }
 
-    private fun sendControl(type: String, payload: Map<String, Any?>): Boolean {
+    private fun sendControl(
+        type: String,
+        payload: Map<String, Any?>,
+        onSequenceAllocated: ((Long) -> Unit)? = null
+    ): Boolean {
         val sid = sessionId ?: return false
         val secret = sessionSecret ?: return false
         val client = deviceId ?: return false
         val next = sequence.getAndIncrement()
+        onSequenceAllocated?.invoke(next)
         val authenticated = linkedMapOf<String, Any?>(
             "type" to type, "client_id" to client, "session_id" to sid, "payload" to payload)
         val mac = hmac(secret, canonicalMessage(next, authenticated).toByteArray(StandardCharsets.UTF_8))

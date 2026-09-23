@@ -125,6 +125,14 @@ class UDPServer:
                 await self._handle_pair_proof(message, addr)
                 return
 
+            if msg_type == "reconnect_begin":
+                await self._handle_reconnect_begin(message, addr)
+                return
+
+            if msg_type == "reconnect_proof":
+                await self._handle_reconnect_proof(message, addr)
+                return
+
             if msg_type == "pair":
                 logger.warning("Rejected legacy UDP pair message from %s", addr[0])
                 return
@@ -141,7 +149,7 @@ class UDPServer:
             elif msg_type == 'heartbeat':
                 await self.connection_manager.update_activity(client_id)
             elif msg_type == 'ping':
-                await self._send_pong(client_id, addr)
+                await self._send_pong(client_id, addr, message.get("sequence"))
             else:
                 logger.warning("Discarding unknown authenticated UDP message type")
         except SessionSecurityError as exc:
@@ -239,6 +247,86 @@ class UDPServer:
         if self.transport:
             self.transport.sendto(json.dumps(response).encode("utf-8"), addr)
 
+    async def _handle_reconnect_begin(self, message: dict, addr):
+        """Issue a short-lived challenge for device reconnection."""
+        device_id = message.get("device_id")
+        client_nonce = message.get("client_nonce")
+        if (
+            not isinstance(device_id, str)
+            or not device_id
+            or not isinstance(client_nonce, str)
+            or not client_nonce
+        ):
+            raise ValueError("reconnect_begin requires device_id and client_nonce")
+
+        challenge = self.security.create_reconnect_challenge(
+            device_id, client_nonce, addr
+        )
+        response = {
+            "type": "reconnect_challenge",
+            "challenge_id": challenge.challenge_id,
+            "challenge": challenge.challenge,
+        }
+        if self.transport:
+            self.transport.sendto(json.dumps(response).encode("utf-8"), addr)
+
+    async def _handle_reconnect_proof(self, message: dict, addr):
+        """Verify a reconnection proof and establish a new UDP session."""
+        device_id = message.get("device_id")
+        client_nonce = message.get("client_nonce")
+        challenge_id = message.get("challenge_id")
+        challenge = message.get("challenge")
+        proof = message.get("proof")
+        if not all(
+            isinstance(value, str) and value
+            for value in (
+                device_id,
+                client_nonce,
+                challenge_id,
+                challenge,
+                proof,
+            )
+        ):
+            raise ValueError(
+                "reconnect_proof requires device_id, client_nonce, "
+                "challenge_id, challenge and proof"
+            )
+
+        if (
+            self.connection_manager.get_client(device_id) is None
+            and self.connection_manager.get_client_count()
+            >= self.connection_manager.max_clients
+        ):
+            logger.warning("Rejected UDP reconnection because max_clients is reached")
+            return
+
+        session = self.security.consume_reconnect_challenge(
+            challenge_id,
+            challenge,
+            device_id,
+            client_nonce,
+            proof,
+            addr,
+        )
+        accepted = await self.connection_manager.connect_client(
+            device_id, "udp", f"{addr[0]}:{addr[1]}"
+        )
+        if not accepted:
+            logger.warning("Rejected UDP reconnection because max_clients is reached")
+            return
+
+        session_id = session.identity.session_id
+        self._sessions[session_id] = device_id
+        self.client_addrs[device_id] = addr
+        response = {
+            "type": "connected",
+            "device_id": device_id,
+            "session_id": session_id,
+            "server_challenge": challenge,
+        }
+        if self.transport:
+            self.transport.sendto(json.dumps(response).encode("utf-8"), addr)
+
     def _authenticate_control_message(self, message: dict) -> str:
         """Verify a control datagram before allowing any state mutation."""
         msg_type = message.get("type")
@@ -325,12 +413,13 @@ class UDPServer:
             except Exception as e:
                 logger.error(f"Error sending UDP vibration to {client_id}: {e}")
     
-    async def _send_pong(self, client_id: str, addr):
+    async def _send_pong(self, client_id: str, addr, sequence):
         """Send pong response to ping."""
         if self.transport:
             response = json.dumps({
                 'type': 'pong',
                 'client_id': client_id,
+                'sequence': sequence,
                 'timestamp': asyncio.get_event_loop().time()
             }).encode('utf-8')
             self.transport.sendto(response, addr)

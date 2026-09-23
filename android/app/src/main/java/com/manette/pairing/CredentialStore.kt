@@ -25,7 +25,7 @@ class AndroidKeystoreCredentialStore(private val context: Context) : CredentialS
     }
 
     override fun save(credentials: PairingCredentials) {
-        require(credentials.isValid()) { "Cannot persist invalid pairing credentials" }
+        require(credentials.isUsableForReconnect()) { "Cannot persist invalid pairing credentials" }
         val key = getOrCreateKey()
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key)
@@ -42,7 +42,10 @@ class AndroidKeystoreCredentialStore(private val context: Context) : CredentialS
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(),
                 GCMParameterSpec(128, encrypted.copyOfRange(0, 12)))
-            PairingPayloadParser.parse(String(cipher.doFinal(encrypted.copyOfRange(12, encrypted.size)), Charsets.UTF_8))
+            PairingPayloadParser.parse(
+                String(cipher.doFinal(encrypted.copyOfRange(12, encrypted.size)), Charsets.UTF_8),
+                ignoreExpiry = true
+            )
         } catch (_: Exception) {
             null
         }

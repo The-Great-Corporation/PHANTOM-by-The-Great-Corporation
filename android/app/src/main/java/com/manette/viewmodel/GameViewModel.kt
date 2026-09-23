@@ -31,7 +31,9 @@ import com.manette.sensors.GyroscopeHandler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 
 enum class OperationMode {
     THE_GREAT,       // Serveur PC via Wi-Fi UDP / USB ADB
@@ -41,9 +43,14 @@ enum class OperationMode {
 class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private val profileManager = ProfileManager(application)
+    private val profilePreferences = application.getSharedPreferences(
+        "phantom_profile_state", Context.MODE_PRIVATE
+    )
+    private val activeProfileKey = "active_profile_filename"
     val connectionManager = ConnectionManager(application)
     private val credentialStore = AndroidKeystoreCredentialStore(application)
     private var pairingCredentials: PairingCredentials? = credentialStore.load()
+    private var connectionJob: Job? = null
 
     /** Gyroscope : données envoyées vers le serveur en mode The Great. */
     private val gyroscopeHandler = GyroscopeHandler(application).also { it.initialize() }
@@ -190,8 +197,27 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
+            var wasConnected = false
+            connectionManager.connectionState.collect { state ->
+                if (state.connected) {
+                    _pairingRequired.value = false
+                    _pairingMessage.value = "Serveur connecté."
+                    wasConnected = true
+                } else if (wasConnected) {
+                    _pairingMessage.value = state.error
+                        ?: "Connexion au serveur interrompue."
+                    wasConnected = false
+                }
+            }
+        }
+        viewModelScope.launch {
             val defaultProf = profileManager.createDefaultProfileIfNotExists()
-            applyProfile(defaultProf, "default_profile.json")
+            val savedFilename = profilePreferences.getString(activeProfileKey, null)
+            val savedProfile = savedFilename?.let { profileManager.loadProfile(it) }
+            applyProfile(
+                savedProfile ?: defaultProf,
+                if (savedProfile != null) savedFilename!! else "default_profile.json"
+            )
             refreshProfilesList()
 
             // Détection automatique zéro-friction (mode THE GREAT uniquement)
@@ -207,7 +233,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (discoveredIp != null) {
                 _serverIp.value = discoveredIp
                 _isAutoDiscovered.value = true
-                val credentials = pairingCredentials?.takeIf { it.isValid() }
+                val credentials = pairingCredentials?.takeIf { it.isUsableForReconnect() }
                 if (credentials == null) {
                     _pairingRequired.value = true
                     _pairingMessage.value = "Appairage requis avant la reconnexion UDP."
@@ -297,7 +323,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         when (_operationMode.value) {
             OperationMode.THE_GREAT -> {
                 if (_isAutoDiscovered.value) {
-                    val credentials = pairingCredentials?.takeIf { it.isValid() }
+                    val credentials = pairingCredentials?.takeIf { it.isUsableForReconnect() }
                     if (credentials == null) {
                         _pairingRequired.value = true
                         _pairingMessage.value = "Appairage requis avant la reconnexion UDP."
@@ -329,15 +355,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun connect() {
         viewModelScope.launch {
-            val credentials = pairingCredentials?.takeIf { it.isValid() }
-            if (_connectionType.value == "udp" && credentials == null) {
+            val credentials = pairingCredentials?.takeIf { it.isUsableForReconnect() }
+            if (credentials == null) {
                 _pairingRequired.value = true
                 _pairingMessage.value = "Saisissez un payload d’appairage valide."
                 return@launch
             }
-            val portInt = credentials?.port ?: (_serverPort.value.toIntOrNull() ?: 8888)
+            val portInt = credentials.port
             connectionManager.connect(_connectionType.value, _serverIp.value, portInt,
-                credentials?.deviceId, credentials?.tokenId, credentials?.tokenSecret)
+                credentials.deviceId, credentials.tokenId, credentials.tokenSecret)
         }
     }
 
@@ -350,22 +376,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _serverPort.value = credentials.port.toString()
             _pairingRequired.value = false
             _pairingMessage.value = "Appairage enregistré. Connexion au serveur…"
-            if (_isAutoDiscovered.value) {
-                viewModelScope.launch {
-                    val connected = connectionManager.connect(
-                        "udp",
-                        _serverIp.value,
-                        credentials.port,
-                        credentials.deviceId,
-                        credentials.tokenId,
-                        credentials.tokenSecret
-                    )
-                    if (connected) {
-                        _pairingMessage.value = "Serveur connecté."
-                    } else {
-                        _pairingMessage.value =
-                            "Connexion impossible. Vérifiez que le serveur est démarré et que le QR n'est pas expiré."
-                    }
+            connectionJob?.cancel()
+            connectionJob = viewModelScope.launch {
+                val connected = connectionManager.connect(
+                    "udp",
+                    credentials.server,
+                    credentials.port,
+                    credentials.deviceId,
+                    credentials.tokenId,
+                    credentials.tokenSecret
+                )
+                if (connected) {
+                    _pairingMessage.value = "Serveur connecté."
+                } else {
+                    _pairingMessage.value =
+                        "Connexion impossible. Vérifiez que le serveur est démarré et que le QR n'est pas expiré."
                 }
             }
             null
@@ -384,7 +409,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { connectionManager.disconnect() }
     }
 
+    fun reconnectAfterResume() {
+        if (_operationMode.value == OperationMode.THE_GREAT &&
+            pairingCredentials?.isUsableForReconnect() == true
+        ) {
+            connectForCurrentMode()
+        }
+    }
+
     fun disconnect() {
+        connectionJob?.cancel()
         // Émettre l'état neutre avant la déconnexion (A5 : aucune touche collée)
         releaseAllInputs()
         gyroscopeHandler.stop()
@@ -561,6 +595,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun applyProfile(profile: ControllerProfile, filename: String) {
         _currentProfile.value = profile
         _activeProfileFilename.value = filename
+        profilePreferences.edit().putString(activeProfileKey, filename).apply()
         _backgroundUri.value = profile.layoutConfig.backgroundPath
         _backgroundDim.value = profile.layoutConfig.backgroundDim
         _backgroundScale.value = profile.layoutConfig.backgroundScale
