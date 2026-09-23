@@ -393,19 +393,13 @@ After successful installation:
    - Adjust settings as needed
 
 For more information, see [USAGE.md](USAGE.md) and [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-## Appairage Android UDP
+## Appairage Android UDP & Reconnexion Transparente
 
-1. Démarrez le serveur PHANTOM et générez un payload d'appairage temporaire
-   depuis l'outil serveur prévu à cet effet (`server/core/pairing_payload.py`).
-   Il contient une expiration et un token à usage unique ; ne le copiez pas
-   dans les logs ou dans le dépôt.
-2. Dans **Studio de configuration > Appairage du serveur**, collez le JSON
-   temporaire puis choisissez **Enregistrer**. Le scanner caméra QR n'est pas
-   encore intégré ; cette saisie est le parcours transitoire documenté.
-3. Relancez la découverte ou **Connexion manuelle**. La reconnexion UDP utilise
-   automatiquement le credential chiffré dans Android Keystore et ne passe à
-   « connecté » qu'après `pair_ack`.
-4. Pour changer de serveur ou invalider le téléphone, choisissez **Révoquer**.
-   Le credential local est effacé et un nouvel appairage est requis.
-
-Les modes WebSocket, USB et Bluetooth ne sont pas concernés par ce parcours.
+1. Démarrez le serveur PHANTOM et scannez le QR code généré sur le dashboard GUI
+   (ou collez le JSON d'appairage depuis **Studio de configuration > Appairage du serveur**).
+2. L'application enregistre de manière chiffrée les identifiants dans Android Keystore et enrôle l'appareil côté serveur.
+3. Lors des lancements ultérieurs ou après une déconnexion temporaire, **aucun nouveau scan QR n'est requis** :
+   l'appareil se reconnecte automatiquement via un échange cryptographique sécurisé (challenge/preuve HMAC avec clé dérivée unique par session).
+4. L'enrôlement dispose d'une expiration glissante de 30 jours (renouvelée à chaque reconnexion réussie).
+5. Pour changer de serveur ou réinvalider le téléphone, choisissez **Révoquer**.
+   Le credential local est effacé, l'enrôlement serveur est annulé et un nouvel appairage QR devient nécessaire.

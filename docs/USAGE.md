@@ -306,14 +306,15 @@ Record and replay button sequences.
 - Tap the button to replay sequence
 - Hold for continuous playback
 
-### Reconnection
+### Remembered Enrollment & Seamless Reconnection
 
-The app automatically reconnects if connection is lost.
+After scanning the QR code once during initial setup, the Android device is enrolled on the server.
 
-**Settings:**
-- Reconnect interval: 5 seconds (default)
-- Max attempts: Unlimited
-- Can be disabled in settings
+**Key Reconnection Behaviors:**
+- **No QR Re-scanning**: Temporary disconnections, app restarts, or coming back from background automatically trigger a secure cryptographic reconnection without asking for a new QR code.
+- **Sliding Expiration**: Enrollment stays active as long as the device reconnects within 30 days. Each successful reconnection resets the 30-day timer.
+- **Fresh Sessions**: Every reconnection negotiates a new `session_id`, a new derived HMAC session key, and resets message sequence counters.
+- **Revocation**: Tapping "Revoke" in settings clears local Android Keystore credentials and invalidates server enrollment, requiring a fresh QR scan.
 
 ---
 
