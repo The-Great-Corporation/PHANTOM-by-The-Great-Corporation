@@ -53,6 +53,7 @@ import pathlib
 from main import VirtualGamepadServer
 from core.gamepad_emulator import GamepadState
 from core.pairing_payload import generate_pairing_payload
+from core.landscape_scanner import LandscapeScanner
 
 # Colors - TGC Dark Theme
 BG_COLOR = "#0A0C11"
@@ -133,6 +134,12 @@ class PhantomServerApp:
         self._build_header()
         self._build_tabs()
         self._build_footer()
+
+        # Landscape & Hardware Pre-flight Diagnostic
+        self.landscape_report = LandscapeScanner.run_landscape_scan(acquire_mutex=False)
+        logging.info("Pre-flight Landscape Diagnostic:\n%s", self.landscape_report.format_cli_summary())
+        if not self.landscape_report.vigembus_installed:
+            logging.warning("PILOTE VIGEMBUS NON DETECTE: L'emulation manette PC necessite ViGEmBus.")
 
         # Periodic UI update for controller visualizer
         self.root.after(33, self._update_visualizer_loop)
@@ -616,9 +623,29 @@ class PhantomServerApp:
 
 
 def main():
+    # 1. Anti-doublon absolu : Mutex systeme natif
+    is_single, msg = LandscapeScanner.check_single_instance(acquire=True)
+    if not is_single:
+        try:
+            temp_root = tk.Tk()
+            temp_root.withdraw()
+            messagebox.showwarning(
+                "PHANTOM Server — Instance Active",
+                "Une instance de PHANTOM Server est déjà active sur ce PC.\n\n"
+                "Pour garantir une stabilité optimale et éviter les conflits de ports, "
+                "une seule instance peut s'exécuter à la fois."
+            )
+            temp_root.destroy()
+        except Exception:
+            print(f"[ALERTE ANTI-DOUBLON] {msg}")
+        return
+
     root = tk.Tk()
     app = PhantomServerApp(root)
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        LandscapeScanner.release_single_instance()
 
 
 if __name__ == "__main__":

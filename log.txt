@@ -1,3 +1,0 @@
-0d4603a (HEAD -> refonte/moteur-entree, origin/refonte/moteur-entree) Add unit tests for configuration loader, internationalization, and profile migration
-c81a111 (tag: pre-refonte-manette, origin/main, origin/HEAD, main) Create SECURITY.md for security policy
-6259ebf feat: Implement Virtual Gamepad Server with multi-protocol support
