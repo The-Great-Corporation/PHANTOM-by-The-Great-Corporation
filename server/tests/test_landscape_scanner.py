@@ -21,9 +21,11 @@ class TestLandscapeScanner(unittest.TestCase):
         self.assertIsInstance(res["test_port"]["available"], bool)
 
     def test_single_instance_detection(self):
-        # First check should be single instance
-        ok, msg = LandscapeScanner.check_single_instance(acquire=False)
+        # Isolated test mutex should be free initially
+        test_mutex = "Global\\PhantomTestMutex_Isolated_12345"
+        ok, msg = LandscapeScanner.check_single_instance(acquire=False, mutex_name=test_mutex)
         self.assertTrue(ok)
+
 
     def test_report_launch_ready_logic(self):
         report = LandscapeReport(

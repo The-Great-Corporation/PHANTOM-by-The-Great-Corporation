@@ -99,7 +99,7 @@ class LandscapeScanner:
     }
 
     @staticmethod
-    def check_single_instance(acquire: bool = False) -> Tuple[bool, Optional[str]]:
+    def check_single_instance(acquire: bool = False, mutex_name: str = MUTEX_NAME) -> Tuple[bool, Optional[str]]:
         """Verify if another instance of Phantom Server is already running.
 
         On Windows, this uses a system-wide named Mutex for zero-overhead, atomic detection.
@@ -121,13 +121,14 @@ class LandscapeScanner:
             CreateMutexW.restype = wintypes.HANDLE
             GetLastError = kernel32.GetLastError
 
-            handle = CreateMutexW(None, False, MUTEX_NAME)
+            handle = CreateMutexW(None, False, mutex_name)
             last_error = GetLastError()
 
             if last_error == ERROR_ALREADY_EXISTS:
                 if handle:
                     kernel32.CloseHandle(handle)
                 return False, "Une instance de PHANTOM Server tourne deja sur ce PC."
+
 
             if acquire:
                 _PROCESS_MUTEX_HANDLE = handle
