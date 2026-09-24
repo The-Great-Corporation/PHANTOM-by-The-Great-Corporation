@@ -139,13 +139,18 @@ fun FloatingJoystickZone(
     val density = LocalDensity.current
     val maxRadiusPx = with(density) { baseRadiusDp.dp.toPx() }
 
-    fun updateKnob(rawOffset: Offset) {
+    fun updateKnob(currentPosition: Offset) {
+        val currentAnchor = anchorOffset ?: return
+        val rawOffset = currentPosition - currentAnchor
         val distance = sqrt(rawOffset.x * rawOffset.x + rawOffset.y * rawOffset.y)
-        thumbOffset = if (distance > maxRadiusPx) {
+        if (distance > maxRadiusPx && maxRadiusPx > 0f) {
             val angle = atan2(rawOffset.y, rawOffset.x)
-            Offset(cos(angle) * maxRadiusPx, sin(angle) * maxRadiusPx)
+            thumbOffset = Offset(cos(angle) * maxRadiusPx, sin(angle) * maxRadiusPx)
+            // Ancre suiveuse : l'ancre accompagne le pouce si le mouvement dépasse le rayon max,
+            // garantissant que le stick ne décroche jamais lors d'un glissement continu.
+            anchorOffset = currentPosition - thumbOffset
         } else {
-            rawOffset
+            thumbOffset = rawOffset
         }
         val normX = (thumbOffset.x / maxRadiusPx).coerceIn(-1f, 1f)
         val normY = -(thumbOffset.y / maxRadiusPx).coerceIn(-1f, 1f)
@@ -159,7 +164,7 @@ fun FloatingJoystickZone(
                     val down = awaitFirstDown(requireUnconsumed = false)
                     down.consume()
 
-                    // L'ancre est fixée une seule fois, au début du geste.
+                    // L'ancre est fixée initialement au premier point de contact
                     anchorOffset = down.position
                     thumbOffset = Offset.Zero
                     onMove(0f, 0f)
@@ -167,22 +172,22 @@ fun FloatingJoystickZone(
                     val pointerId = down.id
                     try {
                         while (true) {
-                            // Le passage initial évite qu'un composant visuel
-                            // recouvrant la zone ne déplace ou n'annule le stick.
                             val event = awaitPointerEvent(PointerEventPass.Initial)
+                            // Canal tactile indépendant : si l'événement concerne un autre doigt
+                            // (appui ABXY, D-Pad, gâchette, etc.), on continue sans casser le stick !
                             val pointer = event.changes.firstOrNull { it.id == pointerId }
-                                ?: break
+                                ?: continue
 
+                            // Seul le relâchement physique de CE doigt termine le geste
                             if (!pointer.pressed) {
                                 break
                             }
 
                             pointer.consume()
-                            updateKnob(pointer.position - down.position)
+                            updateKnob(pointer.position)
                         }
                     } finally {
-                        // Toute sortie du geste (up, cancel ou perte du pointeur)
-                        // remet le stick au neutre exactement une fois.
+                        // Réinitialisation au neutre uniquement quand le pouce se lève
                         anchorOffset = null
                         thumbOffset = Offset.Zero
                         onMove(0f, 0f)

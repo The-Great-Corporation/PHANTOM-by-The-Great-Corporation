@@ -51,8 +51,10 @@ fun GameScreen(
     val hidConnected by viewModel.hidConnected.collectAsState()
     val hidDeviceName by viewModel.hidDeviceName.collectAsState()
     val customLayout by viewModel.customLayout.collectAsState()
+    val floatingSticks by viewModel.floatingSticks.collectAsState()
 
     // Verrouillage en mode paysage pour la manette
+
     val context = LocalContext.current
     DisposableEffect(Unit) {
         val activity = context as? android.app.Activity
@@ -146,6 +148,7 @@ fun GameScreen(
             modifier = Modifier.fillMaxSize(),
             skin = skin,
             positions = customLayout,
+            floatingSticks = floatingSticks,
             onButtonPress = { button, pressed ->
                 viewModel.sendButtonPress(button, pressed)
             },
@@ -153,6 +156,7 @@ fun GameScreen(
                 viewModel.sendJoystickMove(stick, x, y)
             }
         )
+
 
         // ── 3. BARRE DE STATUT DISCRÈTE EN HAUT ──────────────────────────────
         Row(
@@ -237,6 +241,8 @@ fun GameScreen(
             },
             onSensitivityChange = { viewModel.setSensitivity(it) },
             onDeadzoneChange = { viewModel.setDeadzone(it) },
+            floatingSticks = floatingSticks,
+            onFloatingSticksChange = { viewModel.setFloatingSticks(it) },
             onReconnect = { viewModel.connectForCurrentMode() },
             onOpenFullSettings = {
                 viewModel.closeQuickSettings()

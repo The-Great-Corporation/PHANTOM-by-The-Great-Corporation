@@ -169,6 +169,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _deadzone = MutableStateFlow(0.1f)
     val deadzone: StateFlow<Float> = _deadzone.asStateFlow()
 
+    private val _floatingSticks = MutableStateFlow(true)
+    val floatingSticks: StateFlow<Boolean> = _floatingSticks.asStateFlow()
+
     private val _quickSettingsOpen = MutableStateFlow(false)
     val quickSettingsOpen: StateFlow<Boolean> = _quickSettingsOpen.asStateFlow()
 
@@ -216,7 +219,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val savedProfile = savedFilename?.let { profileManager.loadProfile(it) }
             applyProfile(
                 savedProfile ?: defaultProf,
-                if (savedProfile != null) savedFilename!! else "default_profile.json"
+                if (savedProfile != null) savedFilename else "default_profile.json"
             )
             refreshProfilesList()
 
@@ -462,6 +465,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun setSkin(newSkin: String) { _skin.value = newSkin; saveCurrentSettings() }
     fun setSensitivity(sens: Float) { _sensitivity.value = sens; saveCurrentSettings() }
     fun setDeadzone(dz: Float) { _deadzone.value = dz; saveCurrentSettings() }
+    fun setFloatingSticks(floating: Boolean) { _floatingSticks.value = floating; saveCurrentSettings() }
     fun toggleQuickSettings() { _quickSettingsOpen.value = !_quickSettingsOpen.value }
     fun closeQuickSettings() { _quickSettingsOpen.value = false }
 
@@ -602,6 +606,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _backgroundOffsetX.value = profile.layoutConfig.backgroundOffsetX
         _backgroundOffsetY.value = profile.layoutConfig.backgroundOffsetY
         _skin.value = profile.layoutConfig.skin.ifEmpty { "xbox" }
+        _floatingSticks.value = profile.layoutConfig.floatingSticks
         _sensitivity.value = profile.sensitivitySettings.overall
         _deadzone.value = profile.deadzoneSettings.leftStick
         _customLayout.value = profile.layoutConfig.buttonPositions
@@ -743,7 +748,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 backgroundScale = _backgroundScale.value,
                 backgroundOffsetX = _backgroundOffsetX.value,
                 backgroundOffsetY = _backgroundOffsetY.value,
-                skin = _skin.value
+                skin = _skin.value,
+                floatingSticks = _floatingSticks.value
             ),
             sensitivitySettings = cur.sensitivitySettings.copy(overall = _sensitivity.value),
             deadzoneSettings = cur.deadzoneSettings.copy(leftStick = _deadzone.value)

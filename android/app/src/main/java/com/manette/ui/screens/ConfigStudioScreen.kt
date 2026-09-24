@@ -66,6 +66,7 @@ fun ConfigStudioScreen(
     val skin by viewModel.skin.collectAsState()
     val sensitivity by viewModel.sensitivity.collectAsState()
     val deadzone by viewModel.deadzone.collectAsState()
+    val floatingSticks by viewModel.floatingSticks.collectAsState()
     val isAutoDiscovered by viewModel.isAutoDiscovered.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val pairingRequired by viewModel.pairingRequired.collectAsState()
@@ -742,8 +743,36 @@ fun ConfigStudioScreen(
                             activeTrackColor = TGCGold
                         )
                     )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Stick Gauche : Mode Tactile", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text(
+                                if (floatingSticks) "Flottant (s'ancre sous le doigt et accompagne le pouce)" else "Fixe (position verrouillée sur le layout)",
+                                fontSize = 11.sp,
+                                color = if (floatingSticks) GamepadPrimary else TGCGold
+                            )
+                        }
+                        Switch(
+                            checked = floatingSticks,
+                            onCheckedChange = { viewModel.setFloatingSticks(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = GamepadPrimary,
+                                checkedTrackColor = GamepadPrimary.copy(alpha = 0.5f),
+                                uncheckedThumbColor = TGCGold,
+                                uncheckedTrackColor = TGCGold.copy(alpha = 0.3f)
+                            )
+                        )
+                    }
                 }
             }
+
 
             Spacer(modifier = Modifier.height(16.dp))
         }

@@ -31,10 +31,13 @@ fun QuickSettingsDrawer(
     connectionType: String,
     onSensitivityChange: (Float) -> Unit,
     onDeadzoneChange: (Float) -> Unit,
+    floatingSticks: Boolean = true,
+    onFloatingSticksChange: (Boolean) -> Unit = {},
     onReconnect: () -> Unit,
     onOpenFullSettings: () -> Unit,
     onClose: () -> Unit
 ) {
+
     AnimatedVisibility(
         visible = isOpen,
         enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
@@ -140,9 +143,38 @@ fun QuickSettingsDrawer(
                             )
                         )
 
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Floating vs Fixed Stick Switch
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Stick Gauche", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                                Text(
+                                    if (floatingSticks) "Mode Flottant" else "Mode Fixe",
+                                    fontSize = 11.sp,
+                                    color = if (floatingSticks) GamepadPrimary else TGCGold
+                                )
+                            }
+                            Switch(
+                                checked = floatingSticks,
+                                onCheckedChange = onFloatingSticksChange,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = GamepadPrimary,
+                                    checkedTrackColor = GamepadPrimary.copy(alpha = 0.5f),
+                                    uncheckedThumbColor = TGCGold,
+                                    uncheckedTrackColor = TGCGold.copy(alpha = 0.3f)
+                                )
+                            )
+                        }
+
                         Spacer(modifier = Modifier.height(16.dp))
 
                         // Quick Reconnect Button
+
                         OutlinedButton(
                             onClick = onReconnect,
                             modifier = Modifier.fillMaxWidth(),
