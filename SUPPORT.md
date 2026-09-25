@@ -22,11 +22,11 @@ Avant de solliciter l'équipe de support, nous vous recommandons de consulter la
 
 ### 2. Sécurité & Vulnérabilités
 Pour signaler une faille de sécurité ou une vulnérabilité réseau, veuillez vous référer à [`SECURITY.md`](SECURITY.md) et écrire directement à :
-📧 `security@thegreatcorporation.com` (ou auprès de **Carl-William DJEGUEMA**).
+📧 `carlwilliamdgm@gmail.com` (Carl-William DJEGUEMA).
 
-### 3. Partenariats & Licences Commerciales
-Pour toute demande de licence entreprise, intégration sur-mesure ou partenariat e-sport :
-📧 `contact@thegreatcorporation.com`
+### 3. Partenariats, Support & Licences Commerciales
+Pour toute demande de licence entreprise, intégration sur-mesure ou question générale :
+📧 `carlwilliamdgm@gmail.com`
 
 ---
 *The Great Corporation™ — Tous droits réservés.*

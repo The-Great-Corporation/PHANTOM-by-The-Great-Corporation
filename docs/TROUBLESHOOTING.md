@@ -105,7 +105,7 @@ Pour obtenir un rapport complet sur l'état de votre machine et identifier tout 
    - La disponibilité de chaque port d'écoute (`8888`, `8889`, `8890`, `8887`).
    - L'état du pont ADB.
 
-Si un problème persiste, contactez le support officiel : `support@thegreatcorporation.com`.
+Si un problème persiste, contactez le support officiel : `carlwilliamdgm@gmail.com` (Carl-William DJEGUEMA).
 
 ---
 *The Great Corporation™ — Documentation Officielle PHANTOM — Tous droits réservés.*

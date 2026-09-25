@@ -27,7 +27,7 @@ Nous nous engageons à offrir une expérience exempte de harcèlement, de discri
 
 La direction de **The Great Corporation** est responsable de faire respecter ces normes. Toute infraction fera l'objet d'un examen confidentiel et immédiat, pouvant mener à l'exclusion définitive des dépôts et canaux officiels du projet.
 
-Pour signaler un manquement : `contact@thegreatcorporation.com`.
+Pour signaler un manquement : `carlwilliamdgm@gmail.com` (Carl-William DJEGUEMA).
 
 ---
 *The Great Corporation™ — Tous droits réservés.*
