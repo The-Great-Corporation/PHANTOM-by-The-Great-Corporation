@@ -17,6 +17,19 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import collections
 import pathlib
+try:
+    import qrcode
+    from PIL import ImageTk
+except ImportError:
+    qrcode = None
+    ImageTk = None
+
+# Make the repository root and server directory importable when this file is
+# launched directly, including through the Windows launcher batch file.
+SERVER_DIR = pathlib.Path(__file__).resolve().parent
+PROJECT_ROOT = SERVER_DIR.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(SERVER_DIR))
 
 # Load configuration and translations
 from config_loader import load_config
@@ -37,14 +50,10 @@ from ui.toast import Toast
 import collections
 import pathlib
 
-
-
-
-# Ensure current dir is in sys.path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from main import VirtualGamepadServer
 from core.gamepad_emulator import GamepadState
+from core.pairing_payload import generate_pairing_payload
+from core.landscape_scanner import LandscapeScanner
 
 # Colors - TGC Dark Theme
 BG_COLOR = "#0A0C11"
@@ -115,6 +124,9 @@ class PhantomServerApp:
         self.server_loop = None
         self.is_running = False
         self.local_ip = get_local_ip()
+        self.pairing_image = None
+        self.pairing_payload = None
+        self.pairing_expiry_job = None
 
         self.last_state = GamepadState()
 
@@ -123,8 +135,40 @@ class PhantomServerApp:
         self._build_tabs()
         self._build_footer()
 
+        # Landscape & Hardware Pre-flight Diagnostic
+        self.landscape_report = LandscapeScanner.run_landscape_scan(acquire_mutex=False)
+        logging.info("Pre-flight Landscape Diagnostic:\n%s", self.landscape_report.format_cli_summary())
+        if not self.landscape_report.vigembus_installed:
+            logging.warning("PILOTE VIGEMBUS NON DETECTE: L'emulation manette PC necessite ViGEmBus.")
+
         # Periodic UI update for controller visualizer
         self.root.after(33, self._update_visualizer_loop)
+
+    def _build_pairing_card(self, parent):
+        card = tk.LabelFrame(
+            parent, text=" Appairage Android sécurisé ", bg=CARD_BG,
+            fg=ACCENT_PRIMARY, font=("Segoe UI", 11, "bold"),
+            padx=12, pady=12, bd=1, relief="solid"
+        )
+        card.pack(fill=tk.X, pady=(0, 15))
+        self.pairing_qr_label = tk.Label(card, text="Démarrez le serveur pour générer le QR Code.",
+                                         bg=CARD_BG, fg=TEXT_SECONDARY)
+        self.pairing_qr_label.pack(side=tk.LEFT, padx=(0, 12))
+        details = tk.Frame(card, bg=CARD_BG)
+        details.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tk.Label(details, text="Scannez ce QR Code depuis l'application Android.",
+                 bg=CARD_BG, fg=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"),
+                 wraplength=300, justify=tk.LEFT).pack(anchor="w")
+        self.pairing_status_label = tk.Label(
+            details, text="QR inactif", bg=CARD_BG, fg=TEXT_SECONDARY,
+            justify=tk.LEFT, wraplength=300
+        )
+        self.pairing_status_label.pack(anchor="w", pady=(6, 8))
+        self.refresh_pairing_btn = tk.Button(
+            details, text="Renouveler le QR Code", command=self._refresh_pairing,
+            bg=ACCENT_PRIMARY, fg="#000000", bd=0, state=tk.DISABLED
+        )
+        self.refresh_pairing_btn.pack(anchor="w")
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -167,15 +211,51 @@ class PhantomServerApp:
         # Tab 1: Dashboard & Connection
         self.tab_dashboard = tk.Frame(self.notebook, bg=BG_COLOR)
         self.notebook.add(self.tab_dashboard, text=Translations["dashboard_tab"])
-        self._build_dashboard_tab()
+        self.dashboard_content = self._create_scrollable_tab(self.tab_dashboard)
+        self._build_dashboard_tab(self.dashboard_content)
 
         # Tab 2: Live Gamepad Visualizer & Logs
         self.tab_visualizer = tk.Frame(self.notebook, bg=BG_COLOR)
         self.notebook.add(self.tab_visualizer, text=Translations["visualizer_tab"])
-        self._build_visualizer_tab()
+        self.visualizer_content = self._create_scrollable_tab(self.tab_visualizer)
+        self._build_visualizer_tab(self.visualizer_content)
 
-    def _build_dashboard_tab(self):
-        grid_frame = tk.Frame(self.tab_dashboard, bg=BG_COLOR, padx=10, pady=10)
+    def _create_scrollable_tab(self, parent):
+        container = tk.Frame(parent, bg=BG_COLOR)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(container, bg=BG_COLOR, bd=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
+        content = tk.Frame(canvas, bg=BG_COLOR)
+        window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def update_scroll_region(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def resize_content(event):
+            canvas.itemconfigure(window_id, width=event.width)
+
+        content.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", resize_content)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def scroll_with_mouse(event):
+            canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        def bind_mousewheel(_event):
+            canvas.bind_all("<MouseWheel>", scroll_with_mouse, add="+")
+
+        def unbind_mousewheel(_event):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", bind_mousewheel)
+        canvas.bind("<Leave>", unbind_mousewheel)
+        return content
+
+    def _build_dashboard_tab(self, parent):
+        grid_frame = tk.Frame(parent, bg=BG_COLOR, padx=10, pady=10)
         grid_frame.pack(fill=tk.BOTH, expand=True)
 
         left_col = tk.Frame(grid_frame, bg=BG_COLOR)
@@ -200,6 +280,8 @@ class PhantomServerApp:
         copy_btn = tk.Button(ip_box, text=Translations["copy_button"], font=("Segoe UI", 9, "bold"), bg=ACCENT_PRIMARY, fg="#000",
                              bd=0, activebackground=BTN_HOVER, padx=12, command=self._copy_ip, takefocus=True)
         copy_btn.pack(side=tk.LEFT, padx=(8, 0), ipady=6)
+
+        self._build_pairing_card(left_col)
 
         # Card 2: Server Ports & Services
         services_card = tk.LabelFrame(left_col, text=" Canaux de Diffusion ", bg=CARD_BG, fg=ACCENT_PRIMARY,
@@ -237,6 +319,15 @@ class PhantomServerApp:
                                      font=("Segoe UI", 11, "bold"), padx=16, pady=16, bd=1, relief="solid")
         clients_card.pack(fill=tk.BOTH, expand=True)
 
+        self.clients_status_label = tk.Label(
+            clients_card,
+            text="Aucun contrôleur connecté",
+            bg=CARD_BG,
+            fg=TEXT_SECONDARY,
+            anchor="w",
+        )
+        self.clients_status_label.pack(fill=tk.X, pady=(0, 8))
+
         self.clients_tree = ttk.Treeview(clients_card, columns=("ID", "Protocole", "Adresse", "Latence"), show="headings", height=8, takefocus=True)
         self.clients_tree.heading("ID", text="Appareil")
         self.clients_tree.heading("Protocole", text="Protocole")
@@ -248,8 +339,8 @@ class PhantomServerApp:
         self.clients_tree.column("Latence", width=80)
         self.clients_tree.pack(fill=tk.BOTH, expand=True)
 
-    def _build_visualizer_tab(self):
-        split_frame = tk.Frame(self.tab_visualizer, bg=BG_COLOR, padx=10, pady=10)
+    def _build_visualizer_tab(self, parent):
+        split_frame = tk.Frame(parent, bg=BG_COLOR, padx=10, pady=10)
         split_frame.pack(fill=tk.BOTH, expand=True)
 
         vis_frame = tk.LabelFrame(split_frame, text=" Visualiseur Phantom en Direct ", bg=CARD_BG, fg=ACCENT_PRIMARY,
@@ -368,6 +459,16 @@ class PhantomServerApp:
             self._render_state(state)
 
             clients = self.server.connection_manager.get_all_clients()
+            if clients:
+                self.clients_status_label.configure(
+                    text=f"{len(clients)} contrôleur(s) connecté(s)",
+                    fg=SUCCESS_COLOR,
+                )
+            else:
+                self.clients_status_label.configure(
+                    text="Serveur actif — aucun contrôleur connecté",
+                    fg=TEXT_SECONDARY,
+                )
             current_items = self.clients_tree.get_children()
             client_ids = set(clients.keys())
 
@@ -424,8 +525,11 @@ class PhantomServerApp:
             self._stop_server_thread()
 
     def _start_server_thread(self):
-        self.server = VirtualGamepadServer()
+        self.server = VirtualGamepadServer(
+            config_path=str(PROJECT_ROOT / "server" / "config" / "server_config.json")
+        )
         self.is_running = True
+        self._refresh_pairing()
 
         def run_loop():
             self.server_loop = asyncio.new_event_loop()
@@ -450,6 +554,58 @@ class PhantomServerApp:
 
         logging.info(Translations["server_started"])
 
+    def _refresh_pairing(self):
+        if not self.server or not self.is_running:
+            return
+        if qrcode is None or ImageTk is None:
+            self.pairing_qr_label.configure(
+                image="", text="Module QR manquant"
+            )
+            self.pairing_status_label.configure(
+                text="Installez les dépendances avec :\n"
+                     "python -m pip install -r server\\requirements.txt",
+                fg=ERROR_COLOR
+            )
+            return
+        try:
+            port = self.server.config["server"]["udp_port"]
+            result = generate_pairing_payload(
+                self.server.session_security,
+                device_id="android-device",
+                server=self.local_ip,
+                port=port,
+                ttl_seconds=120,
+            )
+            qr = qrcode.make(result.payload)
+            qr = qr.resize((180, 180))
+            self.pairing_image = ImageTk.PhotoImage(qr)
+            self.pairing_qr_label.configure(image=self.pairing_image, text="")
+            self.pairing_payload = result.payload
+            self.pairing_status_label.configure(
+                text="QR valide 120 secondes.\nRenouvelez-le pour un nouvel appairage.",
+                fg=SUCCESS_COLOR
+            )
+            self.refresh_pairing_btn.configure(state=tk.NORMAL)
+            if self.pairing_expiry_job:
+                self.root.after_cancel(self.pairing_expiry_job)
+            self.pairing_expiry_job = self.root.after(120000, self._expire_pairing)
+        except Exception as error:
+            logging.error("Unable to generate pairing QR: %s", error)
+            self.pairing_qr_label.configure(image="", text="QR indisponible")
+            self.pairing_status_label.configure(
+                text="Impossible de générer le QR Code. Vérifiez les dépendances serveur.",
+                fg=ERROR_COLOR
+            )
+
+    def _expire_pairing(self):
+        self.pairing_payload = None
+        self.pairing_image = None
+        self.pairing_qr_label.configure(image="", text="QR expiré")
+        self.pairing_status_label.configure(
+            text="Le QR a expiré. Cliquez sur « Renouveler le QR Code ».",
+            fg=TEXT_SECONDARY
+        )
+
     def _stop_server_thread(self):
         if self.server and self.server_loop:
             asyncio.run_coroutine_threadsafe(self.server.stop(), self.server_loop)
@@ -467,9 +623,29 @@ class PhantomServerApp:
 
 
 def main():
+    # 1. Anti-doublon absolu : Mutex systeme natif
+    is_single, msg = LandscapeScanner.check_single_instance(acquire=True)
+    if not is_single:
+        try:
+            temp_root = tk.Tk()
+            temp_root.withdraw()
+            messagebox.showwarning(
+                "PHANTOM Server — Instance Active",
+                "Une instance de PHANTOM Server est déjà active sur ce PC.\n\n"
+                "Pour garantir une stabilité optimale et éviter les conflits de ports, "
+                "une seule instance peut s'exécuter à la fois."
+            )
+            temp_root.destroy()
+        except Exception:
+            print(f"[ALERTE ANTI-DOUBLON] {msg}")
+        return
+
     root = tk.Tk()
     app = PhantomServerApp(root)
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        LandscapeScanner.release_single_instance()
 
 
 if __name__ == "__main__":

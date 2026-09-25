@@ -7,7 +7,7 @@ import com.google.gson.annotations.SerializedName
 import com.manette.data.ControllerProfile
 
 /**
- * Structure interne représentant un fichier preset JSON (assets/presets/*.json).
+ * Structure interne représentant un fichier preset JSON (assets/presets/).
  * Gson ignore les champs inconnus — rétrocompatibilité garantie.
  */
 private data class PresetJson(

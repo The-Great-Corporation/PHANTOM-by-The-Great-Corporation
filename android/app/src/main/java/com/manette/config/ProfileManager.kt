@@ -13,6 +13,9 @@ import java.io.FileWriter
 
 class ProfileManager(private val context: Context) {
 
+    /** Logique de migration extraite en Kotlin pur — testable sans Android. */
+    private val migrationLogic = MigrationLogic()
+
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
     private val profilesDir = File(context.filesDir, "profiles")
 
@@ -217,67 +220,20 @@ class ProfileManager(private val context: Context) {
     // ── Migration schéma ──────────────────────────────────────────────────────
 
     /**
-     * Détecte et migre un profil v1 (schemaVersion absent = 0, ou toute valeur < 2) vers v2.
+     * Délègue à [MigrationLogic.migrateIfNeeded] (Kotlin pur, testable en JVM).
      *
-     * ### Règles de migration v1 → v2
-     * 1. Positions pixel (> [PIXEL_THRESHOLD]) → normalisées 0–1 via [LEGACY_REF_W]/[LEGACY_REF_H].
-     * 2. Clés legacy `btn_a/b/x/y` → regroupées sous `abxy` (centroïde moyen).
-     * 3. Clé `left_trigger` / `right_trigger` → `btn_lt` / `btn_rt` si absentes.
-     * 4. `schemaVersion` mis à 2.
+     * Fix P0-2 : la logique précédente moyennait btn_a/b/x/y en un centroïde `abxy`,
+     * perdant les positions individuelles. La nouvelle implémentation dans [MigrationLogic]
+     * conserve les 4 clés individuelles ET crée `abxy` comme alias de groupe.
      *
      * Si le profil est déjà à `schemaVersion` >= 2, il est retourné intact.
      */
     fun migrateIfNeeded(profile: ControllerProfile): ControllerProfile {
         if (profile.schemaVersion >= 2) return profile
-
         Log.i(TAG, "Migrating profile '${profile.name}' from schemaVersion=${profile.schemaVersion} to 2")
-
-        val rawPositions = profile.layoutConfig.buttonPositions.toMutableMap()
-
-        // ── Étape 1 : normalisation des positions pixel ────────────────────────
-        val needsPixelNorm = rawPositions.values.any { it.x > PIXEL_THRESHOLD || it.y > PIXEL_THRESHOLD }
-        if (needsPixelNorm) {
-            Log.d(TAG, "Normalizing pixel positions to 0–1 range")
-            rawPositions.replaceAll { _, pos ->
-                ButtonPosition(
-                    x = if (pos.x > PIXEL_THRESHOLD) (pos.x / LEGACY_REF_W).coerceIn(0f, 1f) else pos.x,
-                    y = if (pos.y > PIXEL_THRESHOLD) (pos.y / LEGACY_REF_H).coerceIn(0f, 1f) else pos.y,
-                    size = when {
-                        pos.size > PIXEL_THRESHOLD -> (pos.size / 50f).coerceIn(0.5f, 3f)  // pixels → multiplicateur
-                        else -> pos.size
-                    }
-                )
-            }
+        return migrationLogic.migrateIfNeeded(profile).also { migrated ->
+            Log.d(TAG, "Migration complete: schemaVersion=${migrated.schemaVersion}, keys=${migrated.layoutConfig.buttonPositions.keys}")
         }
-
-        // ── Étape 2 : clés legacy btn_a/b/x/y → abxy ──────────────────────────
-        if (!rawPositions.containsKey("abxy")) {
-            val legacyKeys = listOf("btn_a", "btn_b", "btn_x", "btn_y")
-            val legacyPositions = legacyKeys.mapNotNull { rawPositions[it] }
-            if (legacyPositions.isNotEmpty()) {
-                val centerX = legacyPositions.map { it.x }.average().toFloat()
-                val centerY = legacyPositions.map { it.y }.average().toFloat()
-                val avgSize = legacyPositions.map { it.size }.average().toFloat()
-                rawPositions["abxy"] = ButtonPosition(centerX, centerY, avgSize)
-                legacyKeys.forEach { rawPositions.remove(it) }
-                Log.d(TAG, "Migrated legacy ABXY keys → abxy centroid ($centerX, $centerY)")
-            }
-        }
-
-        // ── Étape 3 : renommage left_trigger/right_trigger → btn_lt/btn_rt ────
-        rawPositions["left_trigger"]?.let { rawPositions.getOrPut("btn_lt") { it }; rawPositions.remove("left_trigger") }
-        rawPositions["right_trigger"]?.let { rawPositions.getOrPut("btn_rt") { it }; rawPositions.remove("right_trigger") }
-
-        // ── Étape 4 : compléter les clés manquantes depuis les defaults ─────────
-        LayoutDefaults.defaultPositions.forEach { (key, default) ->
-            rawPositions.getOrPut(key) { default }
-        }
-
-        return profile.copy(
-            schemaVersion = 2,
-            layoutConfig = profile.layoutConfig.copy(buttonPositions = rawPositions),
-            updatedAt = System.currentTimeMillis()
-        )
     }
 
     // ── Filet de sécurité ─────────────────────────────────────────────────────

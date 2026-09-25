@@ -1,21 +1,20 @@
-# Security Policy
+# Security Policy — PHANTOM by The Great Corporation
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
-
 | Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+| :--- | :---: |
+| 1.0.x (Production) | :white_check_mark: |
+| < 1.0 (Bêta / Dev) | :x: |
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
+The Great Corporation prend très au sérieux la sécurité des utilisateurs et l'intégrité de l'écosystème PHANTOM.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Si vous découvrez une faille de sécurité (vulnérabilité réseau UDP/WebSocket, contournement d'authentification HMAC, fuite de credentials Keystore) :
+1. **Ne pas ouvrir d'issue publique**.
+2. Envoyez un rapport détaillé par email à : `carlwilliamdgm@gmail.com` (ou via le contact de Carl-William DJEGUEMA).
+3. Incluez les étapes de reproduction, un PoC (Proof of Concept) si disponible, et l'impact potentiel.
+
+Nous nous engageons à accuser réception sous 48 heures ouvrées et à fournir un correctif dans les plus brefs délais.
+

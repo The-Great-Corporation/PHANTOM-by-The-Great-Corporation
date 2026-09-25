@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import time
-from typing import Optional, Dict, List, Callable, Any
+from typing import Dict, List, Callable, Any, Mapping, Optional, TypedDict
 from dataclasses import dataclass
 
 try:
@@ -18,9 +18,48 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+ButtonValue = bool
+TriggerValue = float
+StickValue = float
+
+
+class GamepadStatePayload(TypedDict, total=False):
+    """Wire representation of a gamepad state.
+
+    Network transports may send a partial payload; omitted fields use the
+    neutral defaults from :class:`GamepadState`.
+    """
+
+    a: ButtonValue
+    b: ButtonValue
+    x: ButtonValue
+    y: ButtonValue
+    left_bumper: ButtonValue
+    right_bumper: ButtonValue
+    back: ButtonValue
+    start: ButtonValue
+    left_thumb: ButtonValue
+    right_thumb: ButtonValue
+    dpad_up: ButtonValue
+    dpad_down: ButtonValue
+    dpad_left: ButtonValue
+    dpad_right: ButtonValue
+    left_trigger: TriggerValue
+    right_trigger: TriggerValue
+    left_stick_x: StickValue
+    left_stick_y: StickValue
+    right_stick_x: StickValue
+    right_stick_y: StickValue
+
+
 @dataclass
 class GamepadState:
-    """Represents the state of a gamepad."""
+    """Complete Xbox-compatible gamepad input state.
+
+    Buttons and D-pad directions are booleans. Triggers use ``0.0..1.0`` and
+    stick axes use ``-1.0..1.0``. The emulator performs the final runtime
+    clamping before sending values to the native backend.
+    """
     # Buttons (Xbox 360 layout)
     a: bool = False
     b: bool = False
@@ -46,6 +85,47 @@ class GamepadState:
     left_stick_y: float = 0.0  # -1.0 to 1.0
     right_stick_x: float = 0.0  # -1.0 to 1.0
     right_stick_y: float = 0.0  # -1.0 to 1.0
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "GamepadState":
+        """Build a state from a partial network payload.
+
+        Unknown fields (for example optional sensor values) are ignored so
+        existing transports remain forward-compatible.
+        """
+        fields = {
+            "a", "b", "x", "y", "left_bumper", "right_bumper",
+            "left_trigger", "right_trigger", "back", "start",
+            "left_thumb", "right_thumb", "dpad_up", "dpad_down",
+            "dpad_left", "dpad_right", "left_stick_x", "left_stick_y",
+            "right_stick_x", "right_stick_y",
+        }
+        return cls(**{key: data[key] for key in fields if key in data})
+
+    def to_payload(self) -> GamepadStatePayload:
+        """Return the state using the stable 20-field wire contract."""
+        return {
+            "a": self.a,
+            "b": self.b,
+            "x": self.x,
+            "y": self.y,
+            "left_bumper": self.left_bumper,
+            "right_bumper": self.right_bumper,
+            "back": self.back,
+            "start": self.start,
+            "left_thumb": self.left_thumb,
+            "right_thumb": self.right_thumb,
+            "dpad_up": self.dpad_up,
+            "dpad_down": self.dpad_down,
+            "dpad_left": self.dpad_left,
+            "dpad_right": self.dpad_right,
+            "left_trigger": self.left_trigger,
+            "right_trigger": self.right_trigger,
+            "left_stick_x": self.left_stick_x,
+            "left_stick_y": self.left_stick_y,
+            "right_stick_x": self.right_stick_x,
+            "right_stick_y": self.right_stick_y,
+        }
 
     def is_neutral(self) -> bool:
         """Return True if no buttons or analog axes are active."""

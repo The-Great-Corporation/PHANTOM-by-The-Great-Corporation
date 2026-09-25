@@ -4,6 +4,7 @@
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     
@@ -52,13 +53,9 @@
         <!-- HID Device Service for Plug & Play mode -->
         <service
             android:name=".hid.BluetoothHidService"
-            android:exported="true"
-            android:permission="android.permission.BLUETOOTH"
-            android:foregroundServiceType="connectedDevice">
-            <intent-filter>
-                <action android:name="android.bluetooth.IBluetoothHidDevice" />
-            </intent-filter>
-        </service>
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
         
     </application>
 

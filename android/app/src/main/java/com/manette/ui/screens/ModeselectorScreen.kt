@@ -54,7 +54,7 @@ fun ModeSelectorScreen(
             // The Great Mode Card
             ModeCard(
                 title = "The Great",
-                description = "Advanced PC Server Mode\n\n• Multi-connection (Wi-Fi, Bluetooth, USB)\n• Xbox 360/DualShock 4 emulation\n• Keyboard/Mouse hybrid mode\n• Haptic feedback\n• Zero-latency USB via ADB",
+                description = "Advanced PC Server Mode\n\n• Multi-connection (Wi-Fi, Bluetooth, USB)\n• Xbox 360/DualShock 4 emulation\n• Haptic feedback\n• Zero-latency USB via ADB",
                 color = GamepadPrimary,
                 onClick = onTheGreatModeSelected
             )

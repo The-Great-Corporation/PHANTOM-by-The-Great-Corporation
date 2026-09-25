@@ -24,11 +24,16 @@ import com.manette.hid.HidStatus
 import com.manette.network.ConnectionManager
 import com.manette.network.ConnectionState
 import com.manette.network.UdpClient
+import com.manette.pairing.AndroidKeystoreCredentialStore
+import com.manette.pairing.PairingCredentials
+import com.manette.pairing.PairingPayloadParser
 import com.manette.sensors.GyroscopeHandler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 
 enum class OperationMode {
     THE_GREAT,       // Serveur PC via Wi-Fi UDP / USB ADB
@@ -38,7 +43,14 @@ enum class OperationMode {
 class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private val profileManager = ProfileManager(application)
+    private val profilePreferences = application.getSharedPreferences(
+        "phantom_profile_state", Context.MODE_PRIVATE
+    )
+    private val activeProfileKey = "active_profile_filename"
     val connectionManager = ConnectionManager(application)
+    private val credentialStore = AndroidKeystoreCredentialStore(application)
+    private var pairingCredentials: PairingCredentials? = credentialStore.load()
+    private var connectionJob: Job? = null
 
     /** Gyroscope : données envoyées vers le serveur en mode The Great. */
     private val gyroscopeHandler = GyroscopeHandler(application).also { it.initialize() }
@@ -90,6 +102,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isAutoDiscovered = MutableStateFlow(false)
     val isAutoDiscovered: StateFlow<Boolean> = _isAutoDiscovered.asStateFlow()
+
+    private val _pairingRequired = MutableStateFlow(pairingCredentials == null)
+    val pairingRequired: StateFlow<Boolean> = _pairingRequired.asStateFlow()
+    private val _pairingMessage = MutableStateFlow<String?>(null)
+    val pairingMessage: StateFlow<String?> = _pairingMessage.asStateFlow()
 
     // ── PLUG & PLAY — Bluetooth HID ──────────────────────────────────────────
     private val _hidCapability = MutableStateFlow(BluetoothHidService.checkCapabilities(application))
@@ -152,6 +169,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _deadzone = MutableStateFlow(0.1f)
     val deadzone: StateFlow<Float> = _deadzone.asStateFlow()
 
+    private val _floatingSticks = MutableStateFlow(true)
+    val floatingSticks: StateFlow<Boolean> = _floatingSticks.asStateFlow()
+
     private val _quickSettingsOpen = MutableStateFlow(false)
     val quickSettingsOpen: StateFlow<Boolean> = _quickSettingsOpen.asStateFlow()
 
@@ -180,8 +200,27 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
+            var wasConnected = false
+            connectionManager.connectionState.collect { state ->
+                if (state.connected) {
+                    _pairingRequired.value = false
+                    _pairingMessage.value = "Serveur connecté."
+                    wasConnected = true
+                } else if (wasConnected) {
+                    _pairingMessage.value = state.error
+                        ?: "Connexion au serveur interrompue."
+                    wasConnected = false
+                }
+            }
+        }
+        viewModelScope.launch {
             val defaultProf = profileManager.createDefaultProfileIfNotExists()
-            applyProfile(defaultProf, "default_profile.json")
+            val savedFilename = profilePreferences.getString(activeProfileKey, null)
+            val savedProfile = savedFilename?.let { profileManager.loadProfile(it) }
+            applyProfile(
+                savedProfile ?: defaultProf,
+                if (savedProfile != null) savedFilename else "default_profile.json"
+            )
             refreshProfilesList()
 
             // Détection automatique zéro-friction (mode THE GREAT uniquement)
@@ -197,9 +236,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (discoveredIp != null) {
                 _serverIp.value = discoveredIp
                 _isAutoDiscovered.value = true
-                Log.d("GameViewModel", "Zero-Friction: Server found at $discoveredIp — connecting…")
-                val portInt = _serverPort.value.toIntOrNull() ?: 8888
-                connectionManager.connect("udp", discoveredIp, portInt)
+                val credentials = pairingCredentials?.takeIf { it.isUsableForReconnect() }
+                if (credentials == null) {
+                    _pairingRequired.value = true
+                    _pairingMessage.value = "Appairage requis avant la reconnexion UDP."
+                    return@launch
+                }
+                _pairingRequired.value = false
+                Log.d("GameViewModel", "Zero-Friction: Server found at $discoveredIp — reconnecting")
+                connectionManager.connect("udp", discoveredIp, credentials.port,
+                    credentials.deviceId, credentials.tokenId, credentials.tokenSecret)
             } else {
                 _isAutoDiscovered.value = false
                 Log.d("GameViewModel", "Zero-Friction: No PHANTOM server found on network")
@@ -280,10 +326,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         when (_operationMode.value) {
             OperationMode.THE_GREAT -> {
                 if (_isAutoDiscovered.value) {
-                    // IP déjà connue via auto-discovery → connexion directe
-                    val portInt = _serverPort.value.toIntOrNull() ?: 8888
+                    val credentials = pairingCredentials?.takeIf { it.isUsableForReconnect() }
+                    if (credentials == null) {
+                        _pairingRequired.value = true
+                        _pairingMessage.value = "Appairage requis avant la reconnexion UDP."
+                        return
+                    }
                     viewModelScope.launch {
-                        connectionManager.connect("udp", _serverIp.value, portInt)
+                        connectionManager.connect("udp", _serverIp.value, credentials.port,
+                            credentials.deviceId, credentials.tokenId, credentials.tokenSecret)
                     }
                 } else {
                     // Pas encore découvert → relancer le scan
@@ -307,12 +358,70 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun connect() {
         viewModelScope.launch {
-            val portInt = _serverPort.value.toIntOrNull() ?: 8888
-            connectionManager.connect(_connectionType.value, _serverIp.value, portInt)
+            val credentials = pairingCredentials?.takeIf { it.isUsableForReconnect() }
+            if (credentials == null) {
+                _pairingRequired.value = true
+                _pairingMessage.value = "Saisissez un payload d’appairage valide."
+                return@launch
+            }
+            val portInt = credentials.port
+            connectionManager.connect(_connectionType.value, _serverIp.value, portInt,
+                credentials.deviceId, credentials.tokenId, credentials.tokenSecret)
+        }
+    }
+
+    fun savePairingPayload(raw: String): String? {
+        return try {
+            val credentials = PairingPayloadParser.parse(raw)
+            credentialStore.save(credentials)
+            pairingCredentials = credentials
+            _serverIp.value = credentials.server
+            _serverPort.value = credentials.port.toString()
+            _pairingRequired.value = false
+            _pairingMessage.value = "Appairage enregistré. Connexion au serveur…"
+            connectionJob?.cancel()
+            connectionJob = viewModelScope.launch {
+                val connected = connectionManager.connect(
+                    "udp",
+                    credentials.server,
+                    credentials.port,
+                    credentials.deviceId,
+                    credentials.tokenId,
+                    credentials.tokenSecret
+                )
+                if (connected) {
+                    _pairingMessage.value = "Serveur connecté."
+                } else {
+                    _pairingMessage.value =
+                        "Connexion impossible. Vérifiez que le serveur est démarré et que le QR n'est pas expiré."
+                }
+            }
+            null
+        } catch (error: IllegalArgumentException) {
+            _pairingRequired.value = true
+            _pairingMessage.value = error.message ?: "Payload d’appairage invalide."
+            _pairingMessage.value
+        }
+    }
+
+    fun clearPairing() {
+        credentialStore.clear()
+        pairingCredentials = null
+        _pairingRequired.value = true
+        _pairingMessage.value = "Appairage révoqué. Un nouveau payload est requis."
+        viewModelScope.launch { connectionManager.disconnect() }
+    }
+
+    fun reconnectAfterResume() {
+        if (_operationMode.value == OperationMode.THE_GREAT &&
+            pairingCredentials?.isUsableForReconnect() == true
+        ) {
+            connectForCurrentMode()
         }
     }
 
     fun disconnect() {
+        connectionJob?.cancel()
         // Émettre l'état neutre avant la déconnexion (A5 : aucune touche collée)
         releaseAllInputs()
         gyroscopeHandler.stop()
@@ -356,6 +465,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun setSkin(newSkin: String) { _skin.value = newSkin; saveCurrentSettings() }
     fun setSensitivity(sens: Float) { _sensitivity.value = sens; saveCurrentSettings() }
     fun setDeadzone(dz: Float) { _deadzone.value = dz; saveCurrentSettings() }
+    fun setFloatingSticks(floating: Boolean) { _floatingSticks.value = floating; saveCurrentSettings() }
     fun toggleQuickSettings() { _quickSettingsOpen.value = !_quickSettingsOpen.value }
     fun closeQuickSettings() { _quickSettingsOpen.value = false }
 
@@ -489,12 +599,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun applyProfile(profile: ControllerProfile, filename: String) {
         _currentProfile.value = profile
         _activeProfileFilename.value = filename
+        profilePreferences.edit().putString(activeProfileKey, filename).apply()
         _backgroundUri.value = profile.layoutConfig.backgroundPath
         _backgroundDim.value = profile.layoutConfig.backgroundDim
         _backgroundScale.value = profile.layoutConfig.backgroundScale
         _backgroundOffsetX.value = profile.layoutConfig.backgroundOffsetX
         _backgroundOffsetY.value = profile.layoutConfig.backgroundOffsetY
         _skin.value = profile.layoutConfig.skin.ifEmpty { "xbox" }
+        _floatingSticks.value = profile.layoutConfig.floatingSticks
         _sensitivity.value = profile.sensitivitySettings.overall
         _deadzone.value = profile.deadzoneSettings.leftStick
         _customLayout.value = profile.layoutConfig.buttonPositions
@@ -636,7 +748,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 backgroundScale = _backgroundScale.value,
                 backgroundOffsetX = _backgroundOffsetX.value,
                 backgroundOffsetY = _backgroundOffsetY.value,
-                skin = _skin.value
+                skin = _skin.value,
+                floatingSticks = _floatingSticks.value
             ),
             sensitivitySettings = cur.sensitivitySettings.copy(overall = _sensitivity.value),
             deadzoneSettings = cur.deadzoneSettings.copy(leftStick = _deadzone.value)

@@ -9,7 +9,7 @@ import com.google.gson.annotations.SerializedName
 import com.manette.ui.components.SkinButtonTheme
 
 /**
- * Structure JSON interne d'un skin (assets/skins/*.json).
+ * Structure JSON interne d'un skin (assets/skins/).
  */
 private data class SkinJson(
     @SerializedName("skin_id")      val skinId: String = "xbox",

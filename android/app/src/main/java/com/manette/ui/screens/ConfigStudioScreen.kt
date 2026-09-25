@@ -1,6 +1,7 @@
 package com.manette.ui.screens
 
 import android.net.Uri
+import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,6 +46,7 @@ import com.manette.ui.components.TGCWatermarkBadge
 import com.manette.ui.components.getSkinTheme
 import com.manette.ui.theme.*
 import com.manette.viewmodel.GameViewModel
+import com.google.zxing.integration.android.IntentIntegrator
 
 @Composable
 fun ConfigStudioScreen(
@@ -64,7 +66,11 @@ fun ConfigStudioScreen(
     val skin by viewModel.skin.collectAsState()
     val sensitivity by viewModel.sensitivity.collectAsState()
     val deadzone by viewModel.deadzone.collectAsState()
+    val floatingSticks by viewModel.floatingSticks.collectAsState()
     val isAutoDiscovered by viewModel.isAutoDiscovered.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
+    val pairingRequired by viewModel.pairingRequired.collectAsState()
+    val pairingMessage by viewModel.pairingMessage.collectAsState()
 
     var advancedExpanded by remember { mutableStateOf(false) }
     var pendingBgUri by remember { mutableStateOf<String?>(null) }
@@ -78,6 +84,21 @@ fun ConfigStudioScreen(
     var pendingSkin by remember { mutableStateOf(skin) }
 
     val context = LocalContext.current
+    val qrScanner = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val scanResult = IntentIntegrator.parseActivityResult(result.resultCode, result.data)
+        val payload = scanResult?.contents
+        if (payload.isNullOrBlank()) {
+            Toast.makeText(context, "QR Code vide ou invalide.", Toast.LENGTH_SHORT).show()
+        } else {
+            val error = viewModel.savePairingPayload(payload)
+            if (error != null) {
+                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     // Sélecteur d'image avec permission persistante et aperçu/ajustement interactif préalable
     val imagePicker = rememberLauncherForActivityResult(
@@ -232,13 +253,14 @@ fun ConfigStudioScreen(
                                 Text("⚡", fontSize = 20.sp)
                                 Column {
                                     Text(
-                                        "Serveur détecté automatiquement",
+                                        if (connectionState.connected) "Connexion UDP établie" else "Serveur détecté automatiquement",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF00E676)
                                     )
                                     Text(
-                                        "IP : ${serverIp} — Connexion établie",
+                                        if (connectionState.connected) "IP : ${serverIp} — handshake confirmé"
+                                        else "IP : ${serverIp} — appairage en cours ou requis",
                                         fontSize = 11.sp,
                                         color = Color(0xFF00E676).copy(alpha = 0.8f)
                                     )
@@ -318,7 +340,67 @@ fun ConfigStudioScreen(
                         }
                     }
 
-                    // ── Accordéon Réglages Avancés (IP et Port uniquement) ────
+                    // ── Statut d'appairage & Scan QR direct (Discret) ─────────
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = if (pairingRequired) Color(0xFFFFB74D) else Color(0xFF00E676),
+                                modifier = Modifier.size(8.dp)
+                            ) {}
+                            Text(
+                                if (pairingRequired) "Appairage serveur requis" else "Serveur appairé (Keystore)",
+                                fontSize = 11.sp,
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = GamepadPrimary,
+                            modifier = Modifier.clickable {
+                                val activity = context as? Activity
+                                if (activity == null) {
+                                    Toast.makeText(context, "Scanner indisponible.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val intent = IntentIntegrator(activity)
+                                        .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                                        .setPrompt("Scannez le QR PHANTOM affiché par le serveur")
+                                        .setBeepEnabled(false)
+                                        .createScanIntent()
+                                    qrScanner.launch(intent)
+                                }
+                            }
+                        ) {
+                            Text(
+                                "📷 Scanner QR",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    pairingMessage?.let {
+                        Text(
+                            it,
+                            fontSize = 11.sp,
+                            color = if (pairingRequired) Color(0xFFFFB74D) else Color.White
+                        )
+                    }
+
+                    // ── Accordéon Réglages Avancés (IP, Port & Saisie manuelle d'appairage) ────
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -328,7 +410,7 @@ fun ConfigStudioScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "⚙ Réglages réseau avancés (IP & Port)",
+                            "⚙ Réglages avancés (IP, Port & Clés d'appairage)",
                             fontSize = 12.sp,
                             color = Color.Gray,
                             fontWeight = FontWeight.Medium
@@ -341,6 +423,7 @@ fun ConfigStudioScreen(
                     }
 
                     if (advancedExpanded) {
+                        var pairingText by remember { mutableStateOf("") }
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             OutlinedTextField(
                                 value = serverIp,
@@ -376,6 +459,40 @@ fun ConfigStudioScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = GamepadPrimary
                                 )
+                            }
+
+                            Divider(color = Color.White.copy(alpha = 0.15f), modifier = Modifier.padding(vertical = 4.dp))
+
+                            Text(
+                                "🔐 Saisie manuelle du Payload d'appairage JSON",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = GamepadPrimary
+                            )
+                            OutlinedTextField(
+                                value = pairingText,
+                                onValueChange = { pairingText = it },
+                                label = { Text("Payload JSON d'appairage") },
+                                minLines = 2,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = GamepadPrimary,
+                                    unfocusedBorderColor = Color.Gray
+                                )
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        val error = viewModel.savePairingPayload(pairingText)
+                                        if (error == null) pairingText = ""
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = GamepadPrimary)
+                                ) { Text("Enregistrer les clés", color = Color.Black, fontSize = 11.sp) }
+                                OutlinedButton(
+                                    onClick = { viewModel.clearPairing() },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Révoquer clés", color = Color.White, fontSize = 11.sp) }
                             }
                         }
                     }
@@ -626,8 +743,36 @@ fun ConfigStudioScreen(
                             activeTrackColor = TGCGold
                         )
                     )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Stick Gauche : Mode Tactile", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text(
+                                if (floatingSticks) "Flottant (s'ancre sous le doigt et accompagne le pouce)" else "Fixe (position verrouillée sur le layout)",
+                                fontSize = 11.sp,
+                                color = if (floatingSticks) GamepadPrimary else TGCGold
+                            )
+                        }
+                        Switch(
+                            checked = floatingSticks,
+                            onCheckedChange = { viewModel.setFloatingSticks(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = GamepadPrimary,
+                                checkedTrackColor = GamepadPrimary.copy(alpha = 0.5f),
+                                uncheckedThumbColor = TGCGold,
+                                uncheckedTrackColor = TGCGold.copy(alpha = 0.3f)
+                            )
+                        )
+                    }
                 }
             }
+
 
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -701,7 +846,7 @@ fun SkinPreviewDialog(
         title = {
             Column {
                 Text(
-                    skinMeta?.displayName ?: skinId.replaceFirstChar { it.uppercase() },
+                    skinMeta?.displayName ?: skinId.replaceFirstChar { it.uppercaseChar() },
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = GamepadPrimary

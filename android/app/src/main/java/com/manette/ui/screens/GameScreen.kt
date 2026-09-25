@@ -51,8 +51,10 @@ fun GameScreen(
     val hidConnected by viewModel.hidConnected.collectAsState()
     val hidDeviceName by viewModel.hidDeviceName.collectAsState()
     val customLayout by viewModel.customLayout.collectAsState()
+    val floatingSticks by viewModel.floatingSticks.collectAsState()
 
     // Verrouillage en mode paysage pour la manette
+
     val context = LocalContext.current
     DisposableEffect(Unit) {
         val activity = context as? android.app.Activity
@@ -74,6 +76,8 @@ fun GameScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE) {
                 viewModel.releaseAllInputs()
+            } else if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.reconnectAfterResume()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -144,6 +148,7 @@ fun GameScreen(
             modifier = Modifier.fillMaxSize(),
             skin = skin,
             positions = customLayout,
+            floatingSticks = floatingSticks,
             onButtonPress = { button, pressed ->
                 viewModel.sendButtonPress(button, pressed)
             },
@@ -151,6 +156,7 @@ fun GameScreen(
                 viewModel.sendJoystickMove(stick, x, y)
             }
         )
+
 
         // ── 3. BARRE DE STATUT DISCRÈTE EN HAUT ──────────────────────────────
         Row(
@@ -228,12 +234,15 @@ fun GameScreen(
             sensitivity = sensitivity,
             deadzone = deadzone,
             latency = connectionState.latency,
+            connected = connectionState.connected,
             connectionType = when (operationMode) {
                 OperationMode.THE_GREAT -> connectionState.connectionType
                 OperationMode.PLUG_AND_PLAY -> "bluetooth_hid"
             },
             onSensitivityChange = { viewModel.setSensitivity(it) },
             onDeadzoneChange = { viewModel.setDeadzone(it) },
+            floatingSticks = floatingSticks,
+            onFloatingSticksChange = { viewModel.setFloatingSticks(it) },
             onReconnect = { viewModel.connectForCurrentMode() },
             onOpenFullSettings = {
                 viewModel.closeQuickSettings()

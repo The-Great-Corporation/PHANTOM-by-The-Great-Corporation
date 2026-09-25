@@ -35,7 +35,9 @@ class ADBBridge:
             logger.error(f"Error initializing ADB bridge: {e}")
             self._adb_available = False
     
-    async def _run_adb_command(self, args: List[str]) -> Optional[str]:
+    async def _run_adb_command(
+        self, args: List[str], *, log_errors: bool = True
+    ) -> Optional[str]:
         """Run an ADB command and return the output."""
         try:
             command = ['adb'] + args
@@ -49,7 +51,8 @@ class ADBBridge:
             if process.returncode == 0:
                 return stdout.decode('utf-8').strip()
             else:
-                logger.error(f"ADB command failed: {stderr.decode('utf-8').strip()}")
+                if log_errors:
+                    logger.error(f"ADB command failed: {stderr.decode('utf-8').strip()}")
                 return None
         except FileNotFoundError:
             logger.error("ADB executable not found")
@@ -87,7 +90,12 @@ class ADBBridge:
         
         try:
             # Remove any existing reverse forwarding
-            await self._run_adb_command(['-s', target_device, 'reverse', '--remove', f'tcp:{self.usb_port}'])
+            # Removing a missing reverse is expected on the first setup and
+            # must not be reported as a failed bridge operation.
+            await self._run_adb_command(
+                ['-s', target_device, 'reverse', '--remove', f'tcp:{self.usb_port}'],
+                log_errors=False,
+            )
             
             # Set up new reverse forwarding (phone localhost:port -> PC localhost:port)
             result = await self._run_adb_command([

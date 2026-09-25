@@ -13,6 +13,12 @@ from core.connection_manager import ConnectionManager
 from core.gamepad_emulator import GamepadEmulator, GamepadState
 from protocols.udp_server import UDPServer
 from core.haptic_feedback import HapticFeedbackManager
+from core.session_security import (
+    SessionSecurity,
+    canonicalize_message,
+    compute_pairing_proof,
+    derive_session_secret,
+)
 
 class TestServerPipeline(unittest.TestCase):
     def setUp(self):
@@ -97,7 +103,10 @@ class TestServerPipeline(unittest.TestCase):
             class MockHaptics:
                 pass
 
-            udp = UDPServer("127.0.0.1", 8888, cm, MockEmulator(), MockHaptics())
+            security = SessionSecurity()
+            udp = UDPServer(
+                "127.0.0.1", 8888, cm, MockEmulator(), MockHaptics(), security=security
+            )
             mock_transport = MockTransport()
             udp.transport = mock_transport
 
@@ -109,11 +118,63 @@ class TestServerPipeline(unittest.TestCase):
             self.assertEqual(response_json["type"], "discover_ack")
             self.assertEqual(response_json["server_name"], "Phantom by The Great Corporation")
 
-            # Test input datagram
+            # Pair before sending a control datagram.
+            token = security.issue_pairing_token("test_client_udp")
+            pair_begin = {
+                "type": "pair_begin",
+                "device_id": "test_client_udp",
+                "token_id": token.token_id,
+                "client_nonce": "nonce-1",
+            }
+            addr = ("127.0.0.1", 54321)
+            await udp._handle_datagram(
+                json.dumps(pair_begin).encode("utf-8"), addr
+            )
+            challenge_response = json.loads(mock_transport.sent[-1][0])
+            await udp._handle_datagram(json.dumps({
+                **pair_begin,
+                **challenge_response,
+                "type": "pair_proof",
+                "proof": compute_pairing_proof(
+                    token.value,
+                    token.token_id,
+                    "test_client_udp",
+                    "nonce-1",
+                    challenge_response["challenge_id"],
+                    challenge_response["challenge"],
+                ),
+            }).encode("utf-8"), addr)
+            pair_response = json.loads(mock_transport.sent[-1][0])
+            session_id = pair_response["session_id"]
+
+            # Test authenticated input datagram.
+            payload = {"a": True, "left_stick_x": 0.8}
+            unsigned = {
+                "type": "input",
+                "client_id": "test_client_udp",
+                "session_id": session_id,
+                "payload": payload,
+            }
+            client_secret = derive_session_secret(
+                token.value,
+                "nonce-1",
+                pair_response["server_challenge"],
+                session_id,
+            )
+            import hashlib
+            import hmac
+            mac = hmac.new(
+                client_secret,
+                canonicalize_message(0, unsigned),
+                hashlib.sha256,
+            ).hexdigest()
             input_data = json.dumps({
                 "type": "input",
                 "client_id": "test_client_udp",
-                "data": {"a": True, "left_stick_x": 0.8}
+                "session_id": session_id,
+                "sequence": 0,
+                "mac": mac,
+                "data": payload,
             }).encode("utf-8")
             await udp._handle_datagram(input_data, ("127.0.0.1", 54321))
             self.assertEqual(udp.gamepad_emulator.last_state.a, True)
@@ -125,4 +186,3 @@ class TestServerPipeline(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

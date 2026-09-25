@@ -97,6 +97,21 @@ fun ControllerView(
         val screenW = maxWidth.value
         val screenH = maxHeight.value
 
+        // ── 0. STICK FLOTTANT GAUCHE (en dessous de tout — couche de fond) ────────
+        //
+        // Fix P0-1 : FloatingJoystickZone est composé EN PREMIER pour qu'il soit
+        // en dessous dans l'ordre z (Compose donne la priorité tactile au dernier
+        // frère). Les boutons LT, LB et Back composés APRÈS captent les events dans
+        // leur zone sans être bloqués par la zone flottante.
+        if (floatingSticks) {
+            FloatingJoystickZone(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.5f),
+                onMove = { x, y -> onJoystickMove("left", x, y) }
+            )
+        }
+
         // ── 1. GÂCHETTE GAUCHE (LT) ───────────────────────────────────────────
         effectivePositions["btn_lt"]?.let { pos ->
             val size = (54f * pos.size).dp
@@ -147,7 +162,7 @@ fun ControllerView(
 
         // ── 3. TOUCHE BACK / SELECT ───────────────────────────────────────────
         effectivePositions["btn_back"]?.let { pos ->
-            val size = (46f * pos.size).dp
+            val size = (48f * pos.size).dp
             Box(
                 modifier = Modifier
                     .offset(
@@ -171,7 +186,7 @@ fun ControllerView(
 
         // ── 4. TOUCHE START ───────────────────────────────────────────────────
         effectivePositions["btn_start"]?.let { pos ->
-            val size = (46f * pos.size).dp
+            val size = (48f * pos.size).dp
             Box(
                 modifier = Modifier
                     .offset(
@@ -241,16 +256,8 @@ fun ControllerView(
             }
         }
 
-        // ── 7. STICK ANALOGIQUE GAUCHE ────────────────────────────────────────
-        if (floatingSticks) {
-            // Mode flottant : s'ancre là où le pouce se pose (toute la moitié gauche)
-            FloatingJoystickZone(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(0.5f),
-                onMove = { x, y -> onJoystickMove("left", x, y) }
-            )
-        } else {
+        // ── 7. STICK ANALOGIQUE GAUCHE (mode fixe uniquement) ─────────────────
+        if (!floatingSticks) {
             // Mode fixe : respecte la position de l'éditeur de layout
             effectivePositions["left_stick"]?.let { pos ->
                 val size = (140f * pos.size).dp

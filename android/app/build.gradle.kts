@@ -39,6 +39,12 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
     
     buildFeatures {
         compose = true
@@ -85,6 +91,9 @@ dependencies {
     
     // JSON
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // QR pairing scanner
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     
     // Image loading (for GIFs and backgrounds)
     implementation("io.coil-kt:coil-compose:2.5.0")

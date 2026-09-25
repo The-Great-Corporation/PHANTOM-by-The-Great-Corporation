@@ -1,0 +1,78 @@
+name: PHANTOM Continuous Integration (CI)
+
+on:
+  push:
+    branches: [ main, correction-manette ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------
+  # Job 1: Windows Server Quality & Test Suite
+  # -------------------------------------------------------------
+  test-server:
+    name: "Server Engine & Security Tests (Windows)"
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt
+          pip install pytest
+
+      - name: Run Pytest Test Suite
+        run: |
+          python -m pytest server/tests -v --durations=10
+
+      - name: Verify Landscape Scanner Module
+        run: |
+          python server/core/landscape_scanner.py
+
+  # -------------------------------------------------------------
+  # Job 2: Android Mobile Client Build & Unit Tests
+  # -------------------------------------------------------------
+  test-android:
+    name: "Android Mobile Client Tests & Build"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+
+      - name: Run Android Unit Tests
+        working-directory: ./android
+        run: ./gradlew testDebugUnitTest --continue
+
+      - name: Assemble Debug APK
+        working-directory: ./android
+        run: ./gradlew assembleDebug
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantom-mobile-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: ignore

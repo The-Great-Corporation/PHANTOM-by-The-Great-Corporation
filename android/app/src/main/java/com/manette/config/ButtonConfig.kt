@@ -78,8 +78,12 @@ data class LayoutConfig(
     val backgroundOffsetY: Float = 0.0f,
     
     @SerializedName("skin")
-    val skin: String = "default"
+    val skin: String = "default",
+
+    @SerializedName("floating_sticks")
+    val floatingSticks: Boolean = true
 )
+
 
 object LayoutDefaults {
     val defaultPositions: Map<String, ButtonPosition> = mapOf(

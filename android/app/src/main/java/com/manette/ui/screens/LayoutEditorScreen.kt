@@ -36,6 +36,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.manette.config.ButtonPosition
 import com.manette.config.LayoutDefaults
+import com.manette.config.LayoutValidator
 import com.manette.ui.components.ControllerView
 import com.manette.ui.components.getSkinTheme
 import com.manette.ui.theme.*
@@ -122,6 +123,10 @@ fun LayoutEditorScreen(
     var showProfilesDialog by remember { mutableStateOf(false) }
     var showNewProfileDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
+
+    // P0-4 : dialogue bloquant de validation des zones tactiles (< 48 dp)
+    var validationViolations by remember { mutableStateOf<List<LayoutValidator.Violation>>(emptyList()) }
+    val showValidationDialog = validationViolations.isNotEmpty()
 
     // Sélecteur d'arrière-plan direct dans l'éditeur
     val bgPicker = rememberLauncherForActivityResult(
@@ -723,13 +728,20 @@ fun LayoutEditorScreen(
                         Text("Défaut", color = TGCGold, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    // Bouton Sauvegarder
+                    // Bouton Sauvegarder (P0-4 : validation bloquante zones tactiles < 48 dp)
                     Button(
                         onClick = {
-                            viewModel.updateAllButtonPositions(positions)
-                            viewModel.applyBackgroundAdjustment(bgDim, bgScale, bgOffsetX, bgOffsetY)
-                            Toast.makeText(context, "Disposition enregistrée sur '${currentProfile?.name ?: "Profil"}' !", Toast.LENGTH_SHORT).show()
-                            onBack()
+                            val validation = LayoutValidator.validatePositions(positions)
+                            if (!validation.isValid) {
+                                // Bloquer et afficher les violations
+                                validationViolations = validation.violations
+                            } else {
+                                validationViolations = emptyList()
+                                viewModel.updateAllButtonPositions(positions)
+                                viewModel.applyBackgroundAdjustment(bgDim, bgScale, bgOffsetX, bgOffsetY)
+                                Toast.makeText(context, "Disposition enregistrée sur '${currentProfile?.name ?: "Profil"}' !", Toast.LENGTH_SHORT).show()
+                                onBack()
+                            }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = GamepadPrimary),
                         shape = RoundedCornerShape(8.dp),
@@ -739,6 +751,60 @@ fun LayoutEditorScreen(
                         Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(13.dp))
                         Spacer(modifier = Modifier.width(3.dp))
                         Text("Sauvegarder", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    }
+
+                    // Dialogue bloquant : zones tactiles trop petites
+                    if (showValidationDialog) {
+                        AlertDialog(
+                            onDismissRequest = { /* non dismissable sans action */ },
+                            title = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = TGCGold)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Zones tactiles trop petites", fontWeight = FontWeight.Bold)
+                                }
+                            },
+                            text = {
+                                androidx.compose.foundation.lazy.LazyColumn {
+                                    item {
+                                        Text(
+                                            "Les contrôles suivants ne respectent pas la taille minimale de ${LayoutValidator.MIN_TOUCH_DP.toInt()} dp :",
+                                            fontSize = 13.sp,
+                                            color = Color.White.copy(alpha = 0.85f)
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                    }
+                                    items(validationViolations) { violation ->
+                                        Text(
+                                            text = "• ${violation.message}",
+                                            fontSize = 12.sp,
+                                            color = TGCGold,
+                                            modifier = Modifier.padding(vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        val correctedPositions = positions.toMutableMap()
+                                        validationViolations.forEach { violation ->
+                                            val key = violation.controlKey
+                                            val pos = correctedPositions[key]
+                                            if (pos != null) {
+                                                val minMult = LayoutValidator.minSizeMultiplier(key)
+                                                correctedPositions[key] = pos.copy(size = maxOf(pos.size, minMult))
+                                            }
+                                        }
+                                        positions = correctedPositions
+                                        validationViolations = emptyList()
+                                    }
+                                ) {
+                                    Text("Corriger", color = GamepadPrimary, fontWeight = FontWeight.Bold)
+                                }
+                            },
+                            containerColor = Color(0xFF1A1F30)
+                        )
                     }
                 }
             }

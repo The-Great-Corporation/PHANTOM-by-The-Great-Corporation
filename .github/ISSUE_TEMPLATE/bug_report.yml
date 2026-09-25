@@ -1,0 +1,69 @@
+name: "🐛 Signalement d'Anomalie (Bug Report)"
+description: "Signaler un dysfonctionnement sur PHANTOM Server ou l'application Mobile"
+title: "[BUG]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de contribuer à la perfection de **PHANTOM by The Great Corporation**.  
+        Avant de soumettre ce rapport, veuillez vérifier que le problème n'est pas déjà résolu dans le [Guide de Dépannage](docs/TROUBLESHOOTING.md).
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: "Composant concerné"
+      description: "Quelle partie du système rencontre le problème ?"
+      options:
+        - "Serveur PC Windows (Dashboard / Service)"
+        - "Application Mobile Android (Inputs / Sticks / UI)"
+        - "Couche Réseau (Auto-Discovery / Wi-Fi UDP / WebSocket)"
+        - "Mode Câble USB (ADB Reverse)"
+        - "Mode Plug & Play (Bluetooth HID)"
+        - "Pilote ViGEmBus / Émulation Manette"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: "Environnement d'exécution"
+      placeholder: "Ex: Windows 11 64-bit | Python 3.12 | Samsung Galaxy S23 (Android 14)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "Description du comportement observé"
+      description: "Décrivez clairement le problème constaté."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "Étapes de reproduction"
+      description: "Comment reproduire systématiquement ce comportement ?"
+      placeholder: |
+        1. Lancer le serveur PC via 'Lancer_Serveur_Phantom_TGC.bat'
+        2. Ouvrir l'application Android en Wi-Fi 5 GHz
+        3. Appuyer simultanément sur le stick gauche et la touche A
+        4. Observer...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Comportement attendu"
+      placeholder: "Ce qui aurait dû se produire selon vous."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Logs et traces console"
+      description: "Collez ici les sorties console du serveur ou les rapports de crash (si applicable)."
+      render: shell

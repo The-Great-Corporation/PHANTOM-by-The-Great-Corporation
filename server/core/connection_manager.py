@@ -143,7 +143,14 @@ class ConnectionManager:
                     inactive_seconds = (now - client.last_activity).total_seconds()
                     if inactive_seconds > self.timeout:
                         inactive_clients.append(client_id)
-                        logger.warning(f"Client {client_id} inactive for {inactive_seconds:.1f}s")
+                        logger.warning(
+                            "Client %s inactive for %.1fs (protocol=%s, address=%s, timeout=%ss)",
+                            client_id,
+                            inactive_seconds,
+                            client.protocol,
+                            client.address,
+                            self.timeout,
+                        )
                 
                 for client_id in inactive_clients:
                     await self.disconnect_client(client_id)

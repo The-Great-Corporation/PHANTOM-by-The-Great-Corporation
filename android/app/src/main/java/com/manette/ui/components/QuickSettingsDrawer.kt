@@ -27,13 +27,17 @@ fun QuickSettingsDrawer(
     sensitivity: Float,
     deadzone: Float,
     latency: Int,
+    connected: Boolean,
     connectionType: String,
     onSensitivityChange: (Float) -> Unit,
     onDeadzoneChange: (Float) -> Unit,
+    floatingSticks: Boolean = true,
+    onFloatingSticksChange: (Boolean) -> Unit = {},
     onReconnect: () -> Unit,
     onOpenFullSettings: () -> Unit,
     onClose: () -> Unit
 ) {
+
     AnimatedVisibility(
         visible = isOpen,
         enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
@@ -90,12 +94,23 @@ fun QuickSettingsDrawer(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                val isConnected = connected
+                                val statusText = when {
+                                    latency > 0 -> "${latency} ms"
+                                    isConnected -> "Connecté"
+                                    else -> "Déconnecté"
+                                }
+                                val statusColor = when {
+                                    !isConnected -> Color(0xFFA0AAB8)
+                                    latency in 1..24 -> Color(0xFF00E676)
+                                    else -> Color(0xFFFFB800)
+                                }
                                 Text("Liaison : " + connectionType.uppercase(), fontSize = 12.sp, color = Color.White)
                                 Text(
-                                    text = if (latency > 0) latency.toString() + " ms" else "Connecté",
+                                    text = statusText,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (latency < 25) Color(0xFF00E676) else Color(0xFFFFB800)
+                                    color = statusColor
                                 )
                             }
                         }
@@ -128,9 +143,38 @@ fun QuickSettingsDrawer(
                             )
                         )
 
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Floating vs Fixed Stick Switch
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Stick Gauche", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                                Text(
+                                    if (floatingSticks) "Mode Flottant" else "Mode Fixe",
+                                    fontSize = 11.sp,
+                                    color = if (floatingSticks) GamepadPrimary else TGCGold
+                                )
+                            }
+                            Switch(
+                                checked = floatingSticks,
+                                onCheckedChange = onFloatingSticksChange,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = GamepadPrimary,
+                                    checkedTrackColor = GamepadPrimary.copy(alpha = 0.5f),
+                                    uncheckedThumbColor = TGCGold,
+                                    uncheckedTrackColor = TGCGold.copy(alpha = 0.3f)
+                                )
+                            )
+                        }
+
                         Spacer(modifier = Modifier.height(16.dp))
 
                         // Quick Reconnect Button
+
                         OutlinedButton(
                             onClick = onReconnect,
                             modifier = Modifier.fillMaxWidth(),
