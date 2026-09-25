@@ -7,6 +7,7 @@
 > *L'expérience manette ultime, réinventée dans l'invisible.*
 
 [![Release](https://img.shields.io/badge/Release-v1.0.0--RC-gold?style=for-the-badge&logo=rocket)](https://github.com/The-Great-Corporation/PHANTOM-by-The-Great-Corporation)
+[![CI](https://github.com/The-Great-Corporation/PHANTOM-by-The-Great-Corporation/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/The-Great-Corporation/PHANTOM-by-The-Great-Corporation/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2B%20%7C%20Android%208.0%2B-blue?style=for-the-badge&logo=windows)](https://github.com/The-Great-Corporation/PHANTOM-by-The-Great-Corporation)
 [![Quality](https://img.shields.io/badge/Tests-54%2F54%20Passing%20(100%25)-success?style=for-the-badge&logo=pytest)](https://github.com/The-Great-Corporation/PHANTOM-by-The-Great-Corporation)
 [![Latency](https://img.shields.io/badge/Latency-Sub--Millisecond%20UDP-purple?style=for-the-badge&logo=speedtest)](https://github.com/The-Great-Corporation/PHANTOM-by-The-Great-Corporation)

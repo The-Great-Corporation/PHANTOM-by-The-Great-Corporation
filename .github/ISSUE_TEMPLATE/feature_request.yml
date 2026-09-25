@@ -1,0 +1,45 @@
+name: "✨ Proposition d'Évolution (Feature Request)"
+description: "Proposer une nouvelle fonctionnalité ou une amélioration d'ergonomie"
+title: "[FEATURE]: "
+labels: ["enhancement", "prestige"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The Great Corporation écoute attentivement les joueurs et créateurs.  
+        Chaque proposition doit servir notre vision : **Satisfaction > Coût**.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: "Catégorie de l'évolution"
+      options:
+        - "Ergonomie & Contrôles Tactiles (Sticks / Boutons / Retours haptiques)"
+        - "Studio de Personnalisation (Skins / Thèmes / Intégration visuelle)"
+        - "Optimisation Réseau & Protocoles de Latence"
+        - "Support Matériel & Nouvelles Plateformes"
+        - "Dashboard Serveur PC & Outils Développeur"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Bénéfice ou friction constatée"
+      description: "Quel besoin ou quelle frustration cette amélioration vise-t-elle à combler ?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Description de la solution proposée"
+      description: "Détaillez la fonctionnalité souhaitée et son fonctionnement idéal."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives envisagées"
+      description: "Avez-vous exploré d'autres approches ?"

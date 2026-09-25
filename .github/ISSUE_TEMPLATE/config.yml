@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "💬 Support Officiel & Assistance Client"
+    url: "https://github.com/The-Great-Corporation/PHANTOM-by-The-Great-Corporation/blob/main/SUPPORT.md"
+    about: "Consultez les canaux officiels d'assistance The Great Corporation."
+  - name: "🔒 Signalement de Vulnérabilité de Sécurité"
+    url: "https://github.com/The-Great-Corporation/PHANTOM-by-The-Great-Corporation/blob/main/SECURITY.md"
+    about: "Pour rapporter une faille critique de manière confidentielle."

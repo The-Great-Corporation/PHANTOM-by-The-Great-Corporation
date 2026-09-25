@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Python Server Dependencies
+  - package-ecosystem: "pip"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "server"
+
+  # Android Gradle Dependencies
+  - package-ecosystem: "gradle"
+    directory: "/android"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "mobile"
